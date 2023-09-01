@@ -10,6 +10,16 @@ COOKIE_FILE="${SESSION_DIR}/cookies.txt"
 API_ENDPOINT="https://query1.finance.yahoo.com/v8/finance/chart/"
 API_SUFFIX="?interval=1d"
 
+if ! $(type jq > /dev/null 2>&1); then
+  echo "'jq' is not in the PATH. (See: https://stedolan.github.io/jq/)"
+  exit 1
+fi
+
+if ! $(type bc > /dev/null 2>&1); then
+  echo "'bc'(GNU Basic Calculator) is not in the PATH. (See: https://www.gnu.org/software/bc/), setting NO_CO>
+  NO_COLOR=true
+fi
+
 # Check if NO_COLOR is set to disable colorization
 if [ -z "$NO_COLOR" ]; then
   : "${COLOR_GREEN:=$'\e[32m'}"
@@ -18,11 +28,6 @@ if [ -z "$NO_COLOR" ]; then
 fi
 
 SYMBOLS=("$@")
-
-if ! $(type jq > /dev/null 2>&1); then
-  echo "'jq' is not in the PATH. (See: https://stedolan.github.io/jq/)"
-  exit 1
-fi
 
 if [ -z "$SYMBOLS" ]; then
   echo "Usage: ./ticker.sh AAPL MSFT GOOG BTC-USD"
@@ -57,13 +62,12 @@ for symbol in "${SYMBOLS[@]}"; do
   priceChange=$(python -c "print('{:.2f}'.format($currentPrice - $previousClose))")
   percentChange=$(python -c "print('{:.2f}'.format(($currentPrice - $previousClose) / $previousClose * 100))")
 
-  if (( $(echo "$priceChange >= 0" | bc -l) )); then
-    color="$COLOR_GREEN"
-  elif (( $(echo "$priceChange < 0" | bc -l) )); then
-    color="$COLOR_RED"
-  fi
-
   if [ -z "$NO_COLOR" ]; then
+    if (( $(echo "$priceChange >= 0" | bc -l) )); then
+      color="$COLOR_GREEN"
+    elif (( $(echo "$priceChange < 0" | bc -l) )); then
+      color="$COLOR_RED"
+    fi
     printf "%s%-10s%8.2f%10.2f%8s%6.2f%%%s\n" \
       "$color" "$symbol" \
       "$currentPrice" "$priceChange" "$color" "$percentChange" \
