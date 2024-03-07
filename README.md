@@ -1,4 +1,11 @@
+> [!NOTE]
+> The original [ticker.sh](https://github.com/pstadler/ticker.sh) has been discontinued. This fork aims to help keep similar functionality alive.
+
+----
+
 # ticker.sh
+
+> **⚠️ Unfortunately, Yahoo decided to lock down their (undocumented) Finance API. This project is currently defunct. See [https://github.com/pstadler/ticker.sh/issues/45].**
 
 > Real-time stock tickers from the command-line.
 
