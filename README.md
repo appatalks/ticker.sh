@@ -43,9 +43,7 @@ Ensure the following dependencies are installed:
 
 You can fetch live stock prices by passing the stock symbols as arguments. For example, to retrieve the prices for Apple (AAPL), Microsoft (MSFT), and Google (GOOG), use the following command:
 
-    ```bash
     ./ticker.sh AAPL MSFT GOOG BTC-USD
-    ```
 
 This will display the current price, the price change, and the percentage change.
 
@@ -53,9 +51,7 @@ This will display the current price, the price change, and the percentage change
 
 To fetch the spot prices for gold, silver, platinum, and the gold-to-silver ratio, use the `-g` flag:
 
-    ```bash
     ./ticker.sh -g
-    ```
 
 This will display:
 
@@ -68,9 +64,7 @@ This will display:
 
 You can also fetch both stock prices and precious metal prices in a single command:
 
-    ```bash
     ./ticker.sh -g AAPL MSFT GOOG BTC-USD
-    ```
 
 This will display both the spot prices for the metals and the prices for the given stock symbols.
 
@@ -78,9 +72,7 @@ This will display both the spot prices for the metals and the prices for the giv
 
 If you are running the script in an environment that doesn't support color or if you prefer plain text output, you can disable colorization by setting the `NO_COLOR` environment variable:
 
-    ```bash
     NO_COLOR=1 ./ticker.sh AAPL MSFT GOOG BTC-USD
-    ```
 
 ### PRO TIP
 
@@ -97,7 +89,7 @@ If you are running the script in an environment that doesn't support color or if
 
 ## License
 
-This script is provided as-is under the MIT License. You are free to modify and distribute it under the terms of the license.
+This script is provided as-is under the ```MIT License```. You are free to modify and distribute it under the terms of the license.
 
 ## Contributions
 
@@ -107,6 +99,6 @@ Contributions are welcome! If you encounter bugs or have feature suggestions, fe
 
 ### Author
 
-Originially Created @pstadler
+Originially Created @pstadler <br> 
 Modifications by @appatalks
 
