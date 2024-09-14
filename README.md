@@ -5,55 +5,108 @@
 
 # ticker.sh
 
-> **⚠️ Unfortunately, Yahoo decided to lock down their (undocumented) Finance API. This project is currently defunct. See [https://github.com/pstadler/ticker.sh/issues/45].**
+`ticker.sh` is a Bash script that retrieves and displays live stock prices, along with precious metal prices (gold, silver, platinum) and the gold-to-silver ratio. It uses Yahoo Finance as the source for fetching data and can display results in color-coded output for better readability.
 
-> Real-time stock tickers from the command-line.
+## Features
 
-`ticker.sh` is a simple shell script using the Yahoo Finance API as a data source. It features colored output and is able to display pre- and post-market prices (denoted with `*`).
+- Fetch live stock prices by providing stock symbols (e.g., AAPL, MSFT, GOOG).
+- Display live spot prices for gold, silver, and platinum.
+- Calculate and display the Gold/Silver ratio.
+- Color-coded output for price changes and metal prices.
+- Option to disable colorization by setting the `NO_COLOR` environment variable.
 
-![ticker.sh](https://raw.githubusercontent.com/pstadler/ticker.sh/master/screenshot.png)
+## Prerequisites
 
-## Install
+Ensure the following dependencies are installed:
 
-```sh
-$ curl -o ticker.sh https://raw.githubusercontent.com/pstadler/ticker.sh/master/ticker.sh
-```
+- [curl](https://curl.se/)
+- [jq](https://stedolan.github.io/jq/) - for JSON parsing.
+- [bc](https://www.gnu.org/software/bc/) - for arithmetic operations.
 
-Make sure to install [jq](https://stedolan.github.io/jq/), a versatile command-line JSON processor.
+## Installation
+
+1. Clone the repository or download the `ticker.sh` script.
+2. Ensure the script is executable:
+
+   ```bash
+   chmod +x ticker.sh
+   ```
+3. Install the required dependencies:
+
+   ```bash
+   sudo apt-get install jq bc curl   # For Debian-based systems
+   ```
 
 ## Usage
 
-```sh
-# Single symbol:
-$ ./ticker.sh AAPL
+### Fetch Stock Prices
 
-# Multiple symbols:
-$ ./ticker.sh AAPL MSFT GOOG BTC-USD
+You can fetch live stock prices by passing the stock symbols as arguments. For example, to retrieve the prices for Apple (AAPL), Microsoft (MSFT), and Google (GOOG), use the following command:
 
-# Read from file:
-$ echo "AAPL MSFT GOOG BTC-USD" > ~/.ticker.conf
-$ ./ticker.sh $(cat ~/.ticker.conf)
+    ```bash
+    ./ticker.sh AAPL MSFT GOOG BTC-USD
+    ```
 
-# Use different colors:
-$ COLOR_BOLD="\e[38;5;248m" \
-  COLOR_GREEN="\e[38;5;154m" \
-  COLOR_RED="\e[38;5;202m" \
-  ./ticker.sh AAPL
+This will display the current price, the price change, and the percentage change.
 
-# Disable colors:
-$ NO_COLOR=1 ./ticker.sh AAPL
+### Fetch Precious Metal Prices
 
-# Update every five seconds:
-$ watch -n 5 -t -c ./ticker.sh AAPL MSFT GOOG BTC-USD
-# Or if `watch` is not available:
-$ while true; do clear; ./ticker.sh AAPL MSFT GOOG BTC-USD; sleep 5; done
-```
+To fetch the spot prices for gold, silver, platinum, and the gold-to-silver ratio, use the `-g` flag:
 
-Please note that ticker.sh may require periodic updates of its session with Yahoo Finance. During these instances, the script may take slightly longer to complete.
+    ```bash
+    ./ticker.sh -g
+    ```
 
-This script works well with [GeekTool](https://www.tynsoe.org/geektool/) and similar software:
+This will display:
 
-```sh
-PATH=/usr/local/bin:$PATH # make sure to include the path where jq is located
-~/GitHub/ticker.sh/ticker.sh AAPL MSFT GOOG BTC-USD
-```
+- **Gold Spot**: The current price of gold.
+- **Silver Spot**: The current price of silver.
+- **Platinum Spot**: The current price of platinum.
+- **Gold/Silver Ratio**: The ratio of the gold price to the silver price.
+
+### Fetch Both Stock and Precious Metal Prices
+
+You can also fetch both stock prices and precious metal prices in a single command:
+
+    ```bash
+    ./ticker.sh -g AAPL MSFT GOOG BTC-USD
+    ```
+
+This will display both the spot prices for the metals and the prices for the given stock symbols.
+
+### Disable Color Output
+
+If you are running the script in an environment that doesn't support color or if you prefer plain text output, you can disable colorization by setting the `NO_COLOR` environment variable:
+
+    ```bash
+    NO_COLOR=1 ./ticker.sh AAPL MSFT GOOG BTC-USD
+    ```
+
+### PRO TIP
+
+> [!NOTE]
+> Use a foreloop for continious ```5 minute``` monitoring:
+>
+> ```bash
+> while true; do ./ticker.sh -g SPY GOLD HNST MSFT PFE PLG PYPL RXT WEAT; sleep 300; clear; done
+> ``` 
+
+## Example Output
+
+![ticker.sh](https://raw.githubusercontent.com/appatalks/ticker.sh/master/screenshot.png)
+
+## License
+
+This script is provided as-is under the MIT License. You are free to modify and distribute it under the terms of the license.
+
+## Contributions
+
+Contributions are welcome! If you encounter bugs or have feature suggestions, feel free to submit an issue or pull request.
+
+---
+
+### Author
+
+Originially Created @pstadler
+Modifications by @appatalks
+
