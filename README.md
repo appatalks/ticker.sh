@@ -7,6 +7,8 @@
 
 `ticker.sh` is a Bash script that retrieves and displays live stock prices, along with precious metal prices (gold, silver, platinum) and the gold-to-silver ratio. It uses Yahoo Finance as the source for fetching data and can display results in color-coded output for better readability.
 
+![ticker.sh](https://raw.githubusercontent.com/appatalks/ticker.sh/main/screenshot.png)
+
 ## Features
 
 - Fetch live stock prices by providing stock symbols (e.g., AAPL, MSFT, GOOG).
@@ -53,13 +55,6 @@ To fetch the spot prices for gold, silver, platinum, and the gold-to-silver rati
 
     ./ticker.sh -g
 
-This will display:
-
-- **Gold Spot**: The current price of gold.
-- **Silver Spot**: The current price of silver.
-- **Platinum Spot**: The current price of platinum.
-- **Gold/Silver Ratio**: The ratio of the gold price to the silver price.
-
 ### Fetch Both Stock and Precious Metal Prices
 
 You can also fetch both stock prices and precious metal prices in a single command:
@@ -83,10 +78,6 @@ If you are running the script in an environment that doesn't support color or if
 > while true; do ./ticker.sh -g SPY GOLD HNST MSFT PFE PLG PYPL RXT WEAT; sleep 300; clear; done
 > ``` 
 
-## Example Output
-
-![ticker.sh](https://raw.githubusercontent.com/appatalks/ticker.sh/master/screenshot.png)
-
 ## License
 
 This script is provided as-is under the ```MIT License```. You are free to modify and distribute it under the terms of the license.
@@ -99,6 +90,6 @@ Contributions are welcome! If you encounter bugs or have feature suggestions, fe
 
 ### Author
 
-Originially Created @pstadler <br> 
-Modifications by @appatalks
+Created by ```@pstadler``` <br> 
+Updated by ```@appatalks```
 
