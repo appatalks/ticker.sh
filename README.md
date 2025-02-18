@@ -43,7 +43,7 @@ Ensure the following dependencies are installed:
 
 ### Fetch Stock Prices
 
-You can fetch live stock prices by passing the stock symbols as arguments. For example, to retrieve the prices for Apple (AAPL), Microsoft (MSFT), and Google (GOOG), use the following command:
+You can fetch live stock prices by passing the stock symbols as arguments in the order that you would like to see. For example, to retrieve the prices for Apple (AAPL), Microsoft (MSFT), and Google (GOOG), use the following command:
 
     ./ticker.sh AAPL MSFT GOOG BTC-USD
 
