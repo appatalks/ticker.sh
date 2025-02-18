@@ -103,7 +103,14 @@ if [ "$DISPLAY_METALS" = true ]; then
   fetch_metal_prices
 fi
 
-for symbol in "${SYMBOLS[@]}"; do
+# Array to hold temporary output file paths
+output_files=()
+
+for i in "${!SYMBOLS[@]}"; do
+  symbol="${SYMBOLS[$i]}"
+  tmp_output="${SESSION_DIR}/output_${i}.txt"
+  output_files[i]="$tmp_output"
+  
  (
   # Running in subshell 
   results=$(fetch_chart "$symbol")
@@ -128,17 +135,15 @@ for symbol in "${SYMBOLS[@]}"; do
     printf "%s%-10s%8.2f%10.2f%8s%6.2f%%%s\n" \
       "$color" "$symbol" \
       "$currentPrice" "$priceChange" "$color" "$percentChange" \
-      "$COLOR_RESET"
+      "$COLOR_RESET" > "$tmp_output"
   else
     printf "%-10s%8.2f%10.2f%9.2f%%\n" \
       "$symbol" \
-      "$currentPrice" "$priceChange" "$percentChange"
+      "$currentPrice" "$priceChange" "$percentChange" > "$tmp_output"
   fi 
  ) &
-
  # Stack PIDs
  pids+=($!)
-
 done
 
 # Wait for all background processes to finish
@@ -146,3 +151,7 @@ for pid in "${pids[@]}"; do
   wait "$pid"
 done
 
+# Print the results in the order of SYMBOLS
+for file in "${output_files[@]}"; do
+  cat "$file"
+done
