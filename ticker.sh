@@ -19,15 +19,19 @@ fi
 
 SYMBOLS=()
 DISPLAY_METALS=false
+SORT_RESULTS=false
 
 # Parse options
-while getopts "g" opt; do
+while getopts "gs" opt; do
   case ${opt} in
-    g )
+    g)
       DISPLAY_METALS=true
       ;;
-    * )
-      echo "Usage: ./ticker.sh [-g] AAPL MSFT GOOG BTC-USD"
+    s)
+      SORT_RESULTS=true
+      ;;
+    *)
+      echo "Usage: ./ticker.sh [-gs] SYMBOL1 SYMBOL2 ..."
       exit 1
       ;;
   esac
@@ -46,8 +50,8 @@ if ! $(type bc > /dev/null 2>&1); then
   exit 1
 fi
 
-if [ -z "$SYMBOLS" ] && [ "$DISPLAY_METALS" = false ]; then
-  echo "Usage: ./ticker.sh [-g] AAPL MSFT GOOG BTC-USD"
+if [ ${#SYMBOLS[@]} -eq 0 ] && [ "$DISPLAY_METALS" = false ]; then
+  echo "Usage: ./ticker.sh [-gs] SYMBOL1 SYMBOL2 ..."
   exit 1
 fi
 
@@ -103,14 +107,14 @@ if [ "$DISPLAY_METALS" = true ]; then
   fetch_metal_prices
 fi
 
-# Array to hold temporary output file paths
+#for symbol in "${SYMBOLS[@]}"; do
 output_files=()
 
 for i in "${!SYMBOLS[@]}"; do
   symbol="${SYMBOLS[$i]}"
   tmp_output="${SESSION_DIR}/output_${i}.txt"
   output_files[i]="$tmp_output"
-  
+
  (
   # Running in subshell 
   results=$(fetch_chart "$symbol")
@@ -125,23 +129,35 @@ for i in "${!SYMBOLS[@]}"; do
   priceChange=$(awk -v currentPrice="$currentPrice" -v previousClose="$previousClose" 'BEGIN {printf "%.2f", currentPrice - previousClose}')
   percentChange=$(awk -v currentPrice="$currentPrice" -v previousClose="$previousClose" 'BEGIN {printf "%.2f", ((currentPrice - previousClose) / previousClose) * 100}')
 
-  if (( $(echo "$priceChange >= 0" | bc -l) )); then
-    color="$COLOR_GREEN"
-  elif (( $(echo "$priceChange < 0" | bc -l) )); then
-    color="$COLOR_RED"
-  fi
-
-  if [ -z "$NO_COLOR" ]; then
-    printf "%s%-10s%8.2f%10.2f%8s%6.2f%%%s\n" \
-      "$color" "$symbol" \
-      "$currentPrice" "$priceChange" "$color" "$percentChange" \
-      "$COLOR_RESET" > "$tmp_output"
+  if [ "$SORT_RESULTS" = true ]; then
+    if [ -z "$NO_COLOR" ]; then
+      if (( $(echo "$priceChange >= 0" | bc -l) )); then
+        color="$COLOR_GREEN"
+      else
+        color="$COLOR_RED"
+      fi
+      # Build the colored output line
+      line=$(printf "%s%-10s%8.2f%10.2f%8s%6.2f%%%s" \
+        "$color" "$symbol" "$currentPrice" "$priceChange" "$color" "$percentChange" "$COLOR_RESET")
+      # Print the numeric sort key, a tab, then the colored line.
+      printf "%.2f\t%s\n" "$percentChange" "$line" > "$tmp_output"
+    else
+      printf "%.2f\t%-10s%8.2f%10.2f%9.2f%%\n" "$percentChange" "$symbol" "$currentPrice" "$priceChange" "$percentChange" > "$tmp_output"
+    fi
   else
-    printf "%-10s%8.2f%10.2f%9.2f%%\n" \
-      "$symbol" \
-      "$currentPrice" "$priceChange" "$percentChange" > "$tmp_output"
-  fi 
- ) &
+    if (( $(echo "$priceChange >= 0" | bc -l) )); then
+      color="$COLOR_GREEN"
+    else
+      color="$COLOR_RED"
+    fi
+    if [ -z "$NO_COLOR" ]; then
+      printf "%s%-10s%8.2f%10.2f%8s%6.2f%%%s\n" "$color" "$symbol" "$currentPrice" "$priceChange" "$color" "$percentChange" "$COLOR_RESET" > "$tmp_output"
+    else
+      printf "%-10s%8.2f%10.2f%9.2f%%\n" "$symbol" "$currentPrice" "$priceChange" "$percentChange" > "$tmp_output"
+    fi
+  fi
+) &
+
  # Stack PIDs
  pids+=($!)
 done
@@ -151,7 +167,12 @@ for pid in "${pids[@]}"; do
   wait "$pid"
 done
 
-# Print the results in the order of SYMBOLS
-for file in "${output_files[@]}"; do
-  cat "$file"
-done
+# Output results
+if [ "$SORT_RESULTS" = true ]; then
+  cat "${output_files[@]}" > "${SESSION_DIR}/combined_output.txt"
+  sort -t$'\t' -k1,1nr "${SESSION_DIR}/combined_output.txt" | cut -f2-
+else
+  for file in "${output_files[@]}"; do
+    cat "$file"
+  done
+fi
