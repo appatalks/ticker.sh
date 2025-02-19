@@ -83,7 +83,7 @@ If you are running the script in an environment that doesn't support color or if
 > Use a foreloop for continious ```5 minute``` monitoring:
 >
 > ```bash
-> while true; do ./ticker.sh -g SPY GOLD HNST MSFT PFE PLG PYPL RXT WEAT; sleep 300; clear; done
+> while true; do ./ticker.sh -gs SPY GOLD HNST MSFT PFE PLG PYPL RXT WEAT; sleep 300; clear; done
 > ``` 
 
 ## License
