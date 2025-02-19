@@ -63,6 +63,14 @@ You can also fetch both stock prices and precious metal prices in a single comma
 
 This will display both the spot prices for the metals and the prices for the given stock symbols.
 
+### Sort Stock Prices by ```gain/loss```
+
+You can also sort the stock prices by ```gain/loss``` percentage with the ```-s``` flag:
+
+    ./ticker.sh -s AAPL MSFT GOOG BTC-USD
+
+This will sort the stock prices for the given stock symbols.
+
 ### Disable Color Output
 
 If you are running the script in an environment that doesn't support color or if you prefer plain text output, you can disable colorization by setting the `NO_COLOR` environment variable:
