@@ -67,7 +67,7 @@ fi
 preflight () {
   curl --silent --output /dev/null --cookie-jar "$COOKIE_FILE" "https://finance.yahoo.com" \
     -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" \
-    -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/115.0.0.0 Safari/537.36"
+    -H "User-Agent: Chrome/115.0.0.0 Safari/537.36"
 }
 
 #-----------------------------------------------------
@@ -78,7 +78,7 @@ fetch_chart () {
   local symbol=$1
   local url="${API_ENDPOINT}${symbol}${API_SUFFIX}"
   curl --silent -b "$COOKIE_FILE" \
-       -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/115.0.0.0 Safari/537.36" \
+       -H "User-Agent: Chrome/115.0.0.0 Safari/537.36" \
        "$url"
 }
 
