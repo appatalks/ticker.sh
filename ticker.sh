@@ -283,17 +283,33 @@ if [ "$SORT_RESULTS" = true ]; then
           rationale_part="$rat"
         fi
       fi
+      # Color the recommendation: BUY -> green, SELL -> red (respect NO_COLOR)
+      REC_PRINT="$rec_part"
+      if [ -z "$NO_COLOR" ]; then
+        case "${rec_part%%:*}" in
+          BUY)
+            REC_PRINT="${COLOR_GREEN}${rec_part}${COLOR_RESET}"
+            ;;
+          SELL)
+            REC_PRINT="${COLOR_RED}${rec_part}${COLOR_RESET}"
+            ;;
+          *)
+            REC_PRINT="$rec_part"
+            ;;
+        esac
+      fi
+
       if [ -n "$status_part" ]; then
         if [ -n "$rationale_part" ]; then
-          printf "%s [%s] [%s] [%s]\n" "$line" "$rec_part" "$status_part" "$rationale_part"
+          printf "%s [%s] [%s] [%s]\n" "$line" "$REC_PRINT" "$status_part" "$rationale_part"
         else
-          printf "%s [%s] [%s]\n" "$line" "$rec_part" "$status_part"
+          printf "%s [%s] [%s]\n" "$line" "$REC_PRINT" "$status_part"
         fi
       else
         if [ -n "$rationale_part" ]; then
-          printf "%s [%s] [%s]\n" "$line" "$rec_part" "$rationale_part"
+          printf "%s [%s] [%s]\n" "$line" "$REC_PRINT" "$rationale_part"
         else
-          printf "%s [%s]\n" "$line" "$rec_part"
+          printf "%s [%s]\n" "$line" "$REC_PRINT"
         fi
       fi
       sleep "$ALERT_DELAY"
@@ -382,17 +398,33 @@ else
           rationale_part="$rat"
         fi
       fi
+      # Color the recommendation: BUY -> green, SELL -> red (respect NO_COLOR)
+      REC_PRINT="$rec_part"
+      if [ -z "$NO_COLOR" ]; then
+        case "${rec_part%%:*}" in
+          BUY)
+            REC_PRINT="${COLOR_GREEN}${rec_part}${COLOR_RESET}"
+            ;;
+          SELL)
+            REC_PRINT="${COLOR_RED}${rec_part}${COLOR_RESET}"
+            ;;
+          *)
+            REC_PRINT="$rec_part"
+            ;;
+        esac
+      fi
+
       if [ -n "$status_part" ]; then
         if [ -n "$rationale_part" ]; then
-          printf "%s [%s] [%s] [%s]\n" "$line" "$rec_part" "$status_part" "$rationale_part"
+          printf "%s [%s] [%s] [%s]\n" "$line" "$REC_PRINT" "$status_part" "$rationale_part"
         else
-          printf "%s [%s] [%s]\n" "$line" "$rec_part" "$status_part"
+          printf "%s [%s] [%s]\n" "$line" "$REC_PRINT" "$status_part"
         fi
       else
         if [ -n "$rationale_part" ]; then
-          printf "%s [%s] [%s]\n" "$line" "$rec_part" "$rationale_part"
+          printf "%s [%s] [%s]\n" "$line" "$REC_PRINT" "$rationale_part"
         else
-          printf "%s [%s]\n" "$line" "$rec_part"
+          printf "%s [%s]\n" "$line" "$REC_PRINT"
         fi
       fi
       sleep "$ALERT_DELAY"

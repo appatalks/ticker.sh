@@ -537,9 +537,9 @@ def main():
                 macd_h = computed.get('macd_hist') or computed.get('macd_hist')
                 ppo_val = computed.get('ppo')
                 if isinstance(macd_h, (int, float)) and macd_h > 0:
-                    parts.append('MACD histogram positive')
+                    parts.append('MACD positive')
                 elif isinstance(macd_h, (int, float)) and macd_h < 0:
-                    parts.append('MACD histogram negative')
+                    parts.append('MACD negative')
                 if isinstance(ppo_val, (int, float)) and ppo_val > 0:
                     parts.append('PPO positive')
                 elif isinstance(ppo_val, (int, float)) and ppo_val < 0:
