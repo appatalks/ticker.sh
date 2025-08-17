@@ -47,6 +47,14 @@ while getopts "gsa:rd-:" opt; do
       ;;
     r)
       RATIONALE_FLAG=1
+      # If the next token looks like a timeframe (e.g., '5m','1h','1d'), treat it as the alert timeframe
+      next="${!OPTIND}"
+      if [ -n "$next" ] && [ "${next:0:1}" != "-" ]; then
+        if printf "%s" "$next" | grep -Eq '^[0-9]+(m|h|d|w|y)$'; then
+          ALERT_TIMEFRAME="$next"
+          OPTIND=$((OPTIND + 1))
+        fi
+      fi
       ;;
     d)
       DEBUG_FLAG=1
@@ -61,6 +69,14 @@ while getopts "gsa:rd-:" opt; do
           ;;
         rationale)
           RATIONALE_FLAG=1
+          # long-form: if next token is a timeframe, treat as alert timeframe
+          val="${!OPTIND}"
+          if [ -n "$val" ] && [ "${val:0:1}" != "-" ]; then
+            if printf "%s" "$val" | grep -Eq '^[0-9]+(m|h|d|w|y)$'; then
+              ALERT_TIMEFRAME="$val"
+              OPTIND=$((OPTIND + 1))
+            fi
+          fi
           ;;
         debug)
           DEBUG_FLAG=1
@@ -84,6 +100,11 @@ shift $((OPTIND -1))
 SYMBOLS+=("$@")
 DEBUG_FLAG=${DEBUG_FLAG:-0}
 RATIONALE_FLAG=${RATIONALE_FLAG:-0}
+
+# If rationale requested but no timeframe provided, default to 1d
+if [ "$RATIONALE_FLAG" -eq 1 ] && [ -z "$ALERT_TIMEFRAME" ]; then
+  ALERT_TIMEFRAME="1d"
+fi
 
 # Recover from user input like: -a -r 1m SYMBOL  (getopts will set ALERT_TIMEFRAME to '-r')
 if [ -n "$ALERT_TIMEFRAME" ] && [ "${ALERT_TIMEFRAME:0:1}" = "-" ]; then

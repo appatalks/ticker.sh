@@ -79,7 +79,7 @@ If you are running the script in an environment that doesn't support color or if
 
 ### AI Alerts (new)
 
-This fork adds an optional AI-powered alerting feature that analyzes recent price indicators and returns a compact recommendation.
+This fork adds an optional AI-powered alerting feature that analyzes recent price indicators and returns a compact recommendation. Take advice with CAUTION.
 
 - Trigger an alert for each symbol with a timeframe using `-a TIMEFRAME` or `--alert TIMEFRAME` (e.g. `1m`, `5m`, `1h`, `1d`).
 - Include `-r` or `--rationale` to print a short rationale after the recommendation.
@@ -110,10 +110,10 @@ Notes
 ### PRO TIP
 
 > [!NOTE]
-> Use a foreloop for continious ```5 minute``` monitoring:
+> Use a foreloop for continious ```5 minute``` monitoring and AI rationale:
 >
 > ```bash
-> while true; do ./ticker.sh -gs SPY GOLD HNST MSFT PFE PLG PYPL RXT WEAT; sleep 300; clear; done
+> while true; do ./ticker.sh -gs -r 5m SPY B HNST MSFT PFE PLG PYPL RXT WEAT; sleep 300; clear; done
 > ``` 
 
 ## License
