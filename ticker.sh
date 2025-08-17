@@ -149,6 +149,18 @@ if [ -n "$ALERT_TIMEFRAME" ] && [ ! -x "$AI_HELPER" ]; then
   # Try to make it executable
   [ -f "$AI_HELPER" ] && chmod +x "$AI_HELPER"
 fi
+# Load environment overrides from a .env file located next to the script, if present.
+# Use allexport so variables defined in .env become exported into the script's environment.
+ENV_FILE="$(dirname "$0")/.env"
+if [ -f "$ENV_FILE" ]; then
+  # shellcheck disable=SC1090
+  set -o allexport
+  # shellcheck source=/dev/null
+  . "$ENV_FILE"
+  set +o allexport
+fi
+
+# Default alert delay (seconds) unless provided via environment or .env
 ALERT_DELAY=${ALERT_DELAY:-4}
 
 # Create session directory for cookies if it doesn't exist
@@ -343,8 +355,8 @@ if [ "$SORT_RESULTS" = true ]; then
 else
   # Unsorted mode: Process in parallel and tag each output with its original index.
   # Then sort numerically by index (preserving input order) and remove the index.
-  tmpfile=$(mktemp "${TMPDIR%/}/ticker_output.XXXXXX")
-  {
+  # Collect outputs in-memory (preserve original input order by index)
+  mapfile -t TICKER_OUTPUTS < <(
     for i in "${!SYMBOLS[@]}"; do
       (
         # Use the index to preserve original ordering.
@@ -372,17 +384,19 @@ else
             "$symbol" "$currentPrice" "$priceChange" "$percentChange")
         fi
 
-        # Write index, symbol, and formatted line to tmpfile
+        # Write index, symbol, and formatted line to the in-memory array
         printf "%d\t%s\t%s\n" "$i" "$symbol" "$line"
       ) &
     done
     wait
-  } > "$tmpfile"
+  )
 
-  sort -t$'\t' -k1,1n "$tmpfile" -o "$tmpfile"
+  # Order by index to preserve original ordering
+  mapfile -t ORDERED_OUTPUTS < <(printf '%s\n' "${TICKER_OUTPUTS[@]}" | sort -t$'\t' -k1,1n)
 
   # Sequentially call AI helper (if requested) to control rate
-  while IFS=$'\t' read -r idx symbol line; do
+  for entry in "${ORDERED_OUTPUTS[@]}"; do
+    IFS=$'\t' read -r idx symbol line <<< "$entry"
     if [ -n "$ALERT_TIMEFRAME" ]; then
             # capture full helper output (debug may print multiple JSON blobs)
       if [ "$DEBUG_FLAG" -eq 1 ]; then
@@ -413,8 +427,8 @@ else
       fi
       if [ "$RATIONALE_FLAG" -eq 1 ] && [ -z "$rationale_part" ]; then
         rat=$(printf "%s" "$full_out" | perl -0777 -ne '
-          if (/"rationale"\s*:\s*"([^"]+)"/s) { print $1; exit }
-          if (/\\"rationale\\"\s*:\s*\\"([^\\"]+)\\"/s) { $s=$1; $s=~s/\\n/ /g; $s=~s/\\"/"/g; print $s; exit }
+          if (/"rationale"\s*:\s*"([^\"]+)"/s) { print $1; exit }
+          if (/\"rationale\"\s*:\s*\"([^\\\"]+)\"/s) { $s=$1; $s=~s/\\n/ /g; $s=~s/\\"/"/g; print $s; exit }
         ')
         if [ -n "$rat" ]; then
           rationale_part="$rat"
@@ -453,6 +467,5 @@ else
     else
       printf "%s\n" "$line"
     fi
-  done < "$tmpfile"
-  rm -f "$tmpfile"
+  done
 fi
