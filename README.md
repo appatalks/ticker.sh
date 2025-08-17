@@ -77,7 +77,7 @@ If you are running the script in an environment that doesn't support color or if
 
     NO_COLOR=1 ./ticker.sh AAPL MSFT GOOG BTC-USD
 
-### AI Alerts (new)
+### AI Alerts (Optional - with ai_alert.py)
 
 This fork adds an optional AI-powered alerting feature that analyzes recent price indicators and returns a compact recommendation. Take advice with CAUTION.
 
@@ -98,7 +98,7 @@ Environment and configuration
 - Place your OpenAI API key in a `.env` file or export `OPENAI_API_KEY`.
 - Optional environment variables:
     - `OPENAI_MODEL` (default: `gpt-5-mini`)
-    - `OPENAI_MAX_COMPLETION_TOKENS` (default: `800`)
+    - `OPENAI_MAX_COMPLETION_TOKENS` (default: `650`)
     - `OPENAI_USE_RESPONSES` (set to `1` to use the Responses API - recommended; default `0`)
 
 Notes
