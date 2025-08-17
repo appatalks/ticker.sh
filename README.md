@@ -99,7 +99,7 @@ Environment and configuration
 - Optional environment variables:
     - `OPENAI_MODEL` (default: `gpt-5-mini`)
     - `OPENAI_MAX_COMPLETION_TOKENS` (default: `800`)
-    - `OPENAI_USE_RESPONSES` (set to `1` to use the Responses API; default `0`)
+    - `OPENAI_USE_RESPONSES` (set to `1` to use the Responses API - recommended; default `0`)
 
 Notes
 
