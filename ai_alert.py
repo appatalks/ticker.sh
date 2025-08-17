@@ -241,6 +241,36 @@ def extract_assistant_text_from_parsed(parsed):
     return None
 
 
+def extract_short_rationale_from_text(text: str):
+    """Return a short rationale string from free-form assistant text.
+    If the text looks like JSON, try to parse and extract common rationale keys.
+    Otherwise return the first sentence (period/!? terminated) or first line.
+    Avoid splitting on numeric decimals by preferring sentence-ending punctuation.
+    """
+    if not text:
+        return None
+    t = text.strip()
+    # If it looks like JSON, try to parse and extract a rationale field
+    if t.startswith('{') or t.startswith('['):
+        try:
+            j = json.loads(t)
+            for k in ('rationale', 'reason', 'explanation'):
+                v = j.get(k)
+                if isinstance(v, str) and v.strip():
+                    return ' '.join(v.split())
+        except Exception:
+            # not valid JSON or can't extract; fall through
+            pass
+        return None
+    # Prefer sentence ending punctuation (., !, ?). This avoids splitting on numeric decimals.
+    import re
+    m = re.search(r"([^.!?]+[.!?])", t)
+    if m:
+        return m.group(1).strip()
+    # Fallback to first line
+    return t.splitlines()[0].strip()
+
+
 def build_prompt(symbol: str, timeframe: str, indicators: Dict[str, object]) -> str:
     # Deterministic prompt requesting JSON output
     return (
@@ -303,17 +333,110 @@ def main():
         interval_param = '1d'
         range_param = '1y'
 
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{args.symbol}?range={range_param}&interval={interval_param}"
+    # Adaptive fetch: try several range values for the requested interval until
+    # we collect at least OPENAI_MIN_SAMPLES closes. This avoids single-point
+    # responses (e.g. interval=1d with range=1d) which are unusable for
+    # indicators like RSI/MACD/PPO.
+    # Base min samples (can be overridden by OPENAI_MIN_SAMPLES env)
+    default_min_samples = int(os.environ.get('OPENAI_MIN_SAMPLES', '30'))
+    # Per-interval recommended minimums (helps intraday and hourly stability)
+    INTERVAL_MIN_SAMPLES = {
+        '1m': 120,
+        '5m': 60,
+        '15m': 50,
+        '30m': 40,
+        '60m': 40,
+        '1h': 50,
+        '1d': 60,
+        '1w': 52,
+    }
+    # Candidate ranges per interval (ordered from shortest to longest)
+    CANDIDATE_RANGES = {
+        '1m': ['1d', '5d'],
+        '5m': ['1d', '5d', '1mo'],
+        '15m': ['1d', '5d', '1mo'],
+        '30m': ['5d', '1mo', '3mo'],
+        '60m': ['5d', '1mo'],
+        '1h': ['5d', '1mo'],
+        '1d': ['1mo', '3mo', '1y'],
+        '1w': ['3mo', '1y'],
+    }
+
+    # Determine min_samples: env override or interval-specific or default
+    min_samples = default_min_samples
     try:
-        r = session.get(url, headers={'User-Agent': headers['User-Agent']}, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-        closes = data['chart']['result'][0]['indicators']['quote'][0]['close']
-        # filter nulls
-        closes = [c for c in closes if c is not None]
-    except Exception as e:
-        print(json.dumps({'error': f'failed to fetch prices: {e}'}))
+        if interval_param in INTERVAL_MIN_SAMPLES:
+            min_samples = int(os.environ.get('OPENAI_MIN_SAMPLES', INTERVAL_MIN_SAMPLES[interval_param]))
+    except Exception:
+        min_samples = default_min_samples
+
+    candidates = CANDIDATE_RANGES.get(interval_param, [range_param])
+    closes = []
+    last_meta = {}
+    last_range_tried = None
+    for rng in candidates:
+        last_range_tried = rng
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{args.symbol}?range={rng}&interval={interval_param}"
+        try:
+            r = session.get(url, headers={'User-Agent': headers['User-Agent']}, timeout=15)
+            r.raise_for_status()
+            data = r.json()
+            last_meta = data['chart']['result'][0].get('meta', {})
+            closes_raw = data['chart']['result'][0]['indicators']['quote'][0].get('close', [])
+            closes = [c for c in closes_raw if c is not None]
+        except Exception:
+            closes = []
+            # try next candidate
+            continue
+        # If the dataGranularity returned differs from our requested interval, keep trying
+        dg = last_meta.get('dataGranularity')
+        # Stop if we have enough samples
+        if len(closes) >= min_samples:
+            break
+
+    if not closes:
+        print(json.dumps({'error': 'failed to fetch prices or no close data'}))
         sys.exit(3)
+
+    # If we still don't have enough samples, print debug info and return a
+    # deterministic heuristic (status F) rather than calling the model on poor data.
+    if len(closes) < min_samples:
+        if args.debug:
+            print(json.dumps({
+                'warning': 'insufficient_samples',
+                'symbol': args.symbol,
+                'requested_interval': interval_param,
+                'last_range_tried': last_range_tried,
+                'samples': len(closes),
+                'meta': last_meta,
+            }, indent=2))
+        # Heuristic fallback (same logic as the no-API-key path) with status F
+        r = rsi(closes)[-1] if rsi(closes) else None
+        if r is None:
+            if args.rationale:
+                print('HOLD:1|F|No RSI data available')
+            else:
+                print('HOLD:1|F')
+            sys.exit(0)
+        rationale = None
+        if r > 70:
+            conf = int(min(10, round((r - 70) / 3 + 5)))
+            rationale = 'RSI over 70 indicates overbought'
+            out = f"SELL:{conf}|F"
+        elif r < 30:
+            conf = int(min(10, round((30 - r) / 3 + 5)))
+            rationale = 'RSI below 30 indicates oversold'
+            out = f"BUY:{conf}|F"
+        else:
+            conf = int(max(1, round(10 - abs(50 - r) / 5)))
+            rationale = 'RSI neutral'
+            out = f"HOLD:{conf}|F"
+        if args.rationale:
+            r_text = ' '.join(rationale.split()) if rationale else ''
+            print(f"{out}|{r_text}")
+        else:
+            print(out)
+        sys.exit(0)
 
     # (OPENAI_API_KEY check moved below after indicators are computed)
 
@@ -339,10 +462,13 @@ def main():
     payload_preview = {
         'use_responses_api': use_responses_api,
         'model': model,
-        'input_preview': (prompt if len(prompt) < 2000 else prompt[:2000] + '...[truncated]'),
+    'input_preview': (prompt if len(prompt) < 2000 else prompt[:2000] + '...[truncated]'),
         'max_completion_tokens': max_tokens_env,
         'reasoning': reasoning_cfg,
         'text': text_cfg,
+    'samples': len(closes),
+    'dataGranularity': last_meta.get('dataGranularity') if isinstance(last_meta, dict) else None,
+    'last_range_tried': last_range_tried,
     }
     # Unconditionally print the payload preview when debug is requested (do not include the API key)
     if args.debug:
@@ -449,6 +575,42 @@ def main():
             except Exception:
                 parsed_rec = None
 
+        # If parsing failed, try to extract a JSON object containing the "recommendation" key
+        def extract_json_from_text(s: str, key: str = 'recommendation'):
+            if not s or not isinstance(s, str):
+                return None
+            idx = s.find(key)
+            if idx == -1:
+                return None
+            # find nearest '{' before the key
+            start = s.rfind('{', 0, idx)
+            if start == -1:
+                return None
+            # scan forward to find matching closing brace
+            depth = 0
+            end = -1
+            for i in range(start, len(s)):
+                if s[i] == '{':
+                    depth += 1
+                elif s[i] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end = i
+                        break
+            if end == -1:
+                return None
+            sub = s[start:end+1]
+            try:
+                return json.loads(sub)
+            except Exception:
+                return None
+
+        if parsed_rec is None and assistant_text:
+            # try to salvage a JSON recommendation embedded in assistant_text
+            try_parsed = extract_json_from_text(assistant_text, 'recommendation')
+            if try_parsed and isinstance(try_parsed, dict):
+                parsed_rec = try_parsed
+
         def validate_parsed_rec(d: dict):
             """Return tuple (rec_str, conf_int) if valid, else (None, None)."""
             if not isinstance(d, dict):
@@ -509,23 +671,17 @@ def main():
                 status = 'S' if finish_reason != 'length' else 'F'
                 out_rec, out_conf = 'BUY', conf
                 # try to pull a short rationale from assistant_text (first sentence)
-                mrat = re.search(r"\.(\s|$)", assistant_text or '')
-                if mrat:
-                    out_rationale = (assistant_text or '').split('.')[:1][0].strip()
+                out_rationale = extract_short_rationale_from_text(assistant_text or '')
             elif 'SELL' in upu:
                 m = re.search(r"(\d{1,2})", upu)
                 conf = int(m.group(1)) if m else 5
                 status = 'S' if finish_reason != 'length' else 'F'
                 out_rec, out_conf = 'SELL', conf
-                mrat = re.search(r"\.(\s|$)", assistant_text or '')
-                if mrat:
-                    out_rationale = (assistant_text or '').split('.')[:1][0].strip()
+                out_rationale = extract_short_rationale_from_text(assistant_text or '')
             elif 'HOLD' in upu:
                 status = 'S' if finish_reason != 'length' else 'F'
                 out_rec, out_conf = 'HOLD', 5
-                mrat = re.search(r"\.(\s|$)", assistant_text or '')
-                if mrat:
-                    out_rationale = (assistant_text or '').split('.')[:1][0].strip()
+                out_rationale = extract_short_rationale_from_text(assistant_text or '')
             else:
                 out_rec, out_conf, status = 'HOLD', 5, 'F'
 
