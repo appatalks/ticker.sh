@@ -34,11 +34,29 @@ fi
 SYMBOLS=()
 DISPLAY_METALS=false
 SORT_RESULTS=false
+ALERT_TIMEFRAME=""
 
-while getopts "gs" opt; do
+while getopts "gs:a:-:" opt; do
   case ${opt} in
     g)
       DISPLAY_METALS=true
+      ;;
+    a)
+      ALERT_TIMEFRAME="$OPTARG"
+      ;;
+    -)
+      case "$OPTARG" in
+        alert)
+          # read next arg as timeframe
+          val="${!OPTIND}"
+          ALERT_TIMEFRAME="$val"
+          OPTIND=$((OPTIND + 1))
+          ;;
+        *)
+          echo "Unknown option --$OPTARG"
+          exit 1
+          ;;
+      esac
       ;;
     s)
       SORT_RESULTS=true
@@ -55,6 +73,13 @@ SYMBOLS+=("$@")
 if [ ${#SYMBOLS[@]} -eq 0 ] && [ "$DISPLAY_METALS" = false ]; then
   echo "Usage: $0 [-gs] SYMBOL1 SYMBOL2 ..."
   exit 1
+fi
+
+# If alert timeframe provided, ensure python helper exists
+AI_HELPER="$(dirname "$0")/ai_alert.py"
+if [ -n "$ALERT_TIMEFRAME" ] && [ ! -x "$AI_HELPER" ]; then
+  # Try to make it executable
+  [ -f "$AI_HELPER" ] && chmod +x "$AI_HELPER"
 fi
 
 # Create session directory for cookies if it doesn't exist
@@ -160,7 +185,13 @@ if [ "$SORT_RESULTS" = true ]; then
           fi
   
           # Prefix with the percent change as the sort key, then a tab and the output line.
-          printf "%.2f\t%s\n" "$percentChange" "$line"
+          # If AI alert is requested, call helper and append a short summary
+          if [ -n "$ALERT_TIMEFRAME" ]; then
+            ai_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" 2>/dev/null | tr -d '\\n')
+            printf "%.2f\t%s %s\n" "$percentChange" "$line" "[$ai_out]"
+          else
+            printf "%.2f\t%s\n" "$percentChange" "$line"
+          fi
         ) &
       done
       wait
@@ -199,8 +230,14 @@ else
               "$symbol" "$currentPrice" "$priceChange" "$percentChange")
           fi
   
-          # Prefix with the original index and a tab, then the output line.
-          printf "%d\t%s\n" "$i" "$line"
+          # If AI alert is requested, call helper and append a short summary
+          if [ -n "$ALERT_TIMEFRAME" ]; then
+            ai_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" 2>/dev/null | tr -d '\\n')
+            printf "%d\t%s %s\n" "$i" "$line" "[$ai_out]"
+          else
+            # Prefix with the original index and a tab, then the output line.
+            printf "%d\t%s\n" "$i" "$line"
+          fi
         ) &
       done
       wait
