@@ -77,6 +77,36 @@ If you are running the script in an environment that doesn't support color or if
 
     NO_COLOR=1 ./ticker.sh AAPL MSFT GOOG BTC-USD
 
+### AI Alerts (new)
+
+This fork adds an optional AI-powered alerting feature that analyzes recent price indicators and returns a compact recommendation.
+
+- Trigger an alert for each symbol with a timeframe using `-a TIMEFRAME` or `--alert TIMEFRAME` (e.g. `1m`, `5m`, `1h`, `1d`).
+- Include `-r` or `--rationale` to print a short rationale after the recommendation.
+- Use `-d` or `--debug` to print the helper payload preview and raw model response for debugging.
+
+Examples:
+
+        # Request AI alert (compact recommendation)
+        ./ticker.sh -a 5m RXT
+
+        # Include rationale and debug info
+        ./ticker.sh -a 5m -r -d RXT
+
+Environment and configuration
+
+- Place your OpenAI API key in a `.env` file or export `OPENAI_API_KEY`.
+- Optional environment variables:
+    - `OPENAI_MODEL` (default: `gpt-5-mini`)
+    - `OPENAI_MAX_COMPLETION_TOKENS` (default: `800`)
+    - `OPENAI_USE_RESPONSES` (set to `1` to use the Responses API; default `0`)
+
+Notes
+
+- The helper script `ai_alert.py` performs the indicator calculations (RSI, MACD, PPO) locally and sends a deterministic prompt to the OpenAI API. When no API key is present the helper returns a simple RSI-based heuristic (no network call).
+- The script rate-limits AI calls (configurable via `ALERT_DELAY`) when processing multiple symbols to avoid overage.
+
+
 ### PRO TIP
 
 > [!NOTE]
