@@ -36,13 +36,20 @@ DISPLAY_METALS=false
 SORT_RESULTS=false
 ALERT_TIMEFRAME=""
 
-while getopts "gs:a:-:" opt; do
+RATIONALE_FLAG=0
+while getopts "gsa:rd-:" opt; do
   case ${opt} in
     g)
       DISPLAY_METALS=true
       ;;
     a)
       ALERT_TIMEFRAME="$OPTARG"
+      ;;
+    r)
+      RATIONALE_FLAG=1
+      ;;
+    d)
+      DEBUG_FLAG=1
       ;;
     -)
       case "$OPTARG" in
@@ -51,6 +58,12 @@ while getopts "gs:a:-:" opt; do
           val="${!OPTIND}"
           ALERT_TIMEFRAME="$val"
           OPTIND=$((OPTIND + 1))
+          ;;
+        rationale)
+          RATIONALE_FLAG=1
+          ;;
+        debug)
+          DEBUG_FLAG=1
           ;;
         *)
           echo "Unknown option --$OPTARG"
@@ -62,16 +75,50 @@ while getopts "gs:a:-:" opt; do
       SORT_RESULTS=true
       ;;
     *)
-      echo "Usage: $0 [-gs] SYMBOL1 SYMBOL2 ..."
+  echo "Usage: $0 [-gsd] SYMBOL1 SYMBOL2 ..."
       exit 1
       ;;
   esac
 done
 shift $((OPTIND -1))
 SYMBOLS+=("$@")
+DEBUG_FLAG=${DEBUG_FLAG:-0}
+RATIONALE_FLAG=${RATIONALE_FLAG:-0}
+
+# Recover from user input like: -a -r 1m SYMBOL  (getopts will set ALERT_TIMEFRAME to '-r')
+if [ -n "$ALERT_TIMEFRAME" ] && [ "${ALERT_TIMEFRAME:0:1}" = "-" ]; then
+  bad="$ALERT_TIMEFRAME"
+  # If there's at least one positional arg, treat it as the intended timeframe
+  if [ ${#SYMBOLS[@]} -ge 1 ]; then
+    ALERT_TIMEFRAME="${SYMBOLS[0]}"
+    # remove the timeframe from symbols
+    SYMBOLS=("${SYMBOLS[@]:1}")
+  else
+    # nothing to recover; unset
+    ALERT_TIMEFRAME=""
+  fi
+  # Now interpret the bad token as a flag: support -r and -d and -s and -g
+  case "$bad" in
+    -r|--rationale)
+      RATIONALE_FLAG=1
+      ;;
+    -d|--debug)
+      DEBUG_FLAG=1
+      ;;
+    -s|--sort)
+      SORT_RESULTS=true
+      ;;
+    -g|--g)
+      DISPLAY_METALS=true
+      ;;
+    *)
+      # ignore unknown
+      ;;
+  esac
+fi
 
 if [ ${#SYMBOLS[@]} -eq 0 ] && [ "$DISPLAY_METALS" = false ]; then
-  echo "Usage: $0 [-gs] SYMBOL1 SYMBOL2 ..."
+  echo "Usage: $0 [-gsd] SYMBOL1 SYMBOL2 ..."
   exit 1
 fi
 
@@ -81,6 +128,7 @@ if [ -n "$ALERT_TIMEFRAME" ] && [ ! -x "$AI_HELPER" ]; then
   # Try to make it executable
   [ -f "$AI_HELPER" ] && chmod +x "$AI_HELPER"
 fi
+ALERT_DELAY=${ALERT_DELAY:-4}
 
 # Create session directory for cookies if it doesn't exist
 [ ! -d "$SESSION_DIR" ] && mkdir -m 700 "$SESSION_DIR"
@@ -154,94 +202,203 @@ fi
 # 2. Unsorted: Wait for all jobs and display in input order.
 #-----------------------------------------------------
 if [ "$SORT_RESULTS" = true ]; then
-  # In sorted mode, each job prefixes its output with the numeric percent change.
-  # After waiting, we sort numerically (descending) and then remove the key.
-  sorted_output=$(
-    {
-      for symbol in "${SYMBOLS[@]}"; do
-        (
-          results=$(fetch_chart "$symbol")
-          currentPrice=$(echo "$results" | jq -r '.chart.result[0].meta.regularMarketPrice')
-          previousClose=$(echo "$results" | jq -r '.chart.result[0].meta.chartPreviousClose')
-          symbol=$(echo "$results" | jq -r '.chart.result[0].meta.symbol')
-          [ "$previousClose" = "null" ] && previousClose="1.0"
-          priceChange=$(awk -v currentPrice="$currentPrice" -v previousClose="$previousClose" \
-                         'BEGIN {printf "%.2f", currentPrice - previousClose}')
-          percentChange=$(awk -v currentPrice="$currentPrice" -v previousClose="$previousClose" \
-                           'BEGIN {printf "%.2f", ((currentPrice - previousClose) / previousClose) * 100}')
-  
-          if [ -z "$NO_COLOR" ]; then
-            if (( $(echo "$priceChange >= 0" | bc -l) )); then
-              color="$COLOR_GREEN"
+  # Gather parallel results into a temp file, then sort and process sequentially.
+  tmpfile=$(mktemp "${TMPDIR%/}/ticker_output.XXXXXX")
+  {
+    for symbol in "${SYMBOLS[@]}"; do
+      (
+        results=$(fetch_chart "$symbol")
+        currentPrice=$(echo "$results" | jq -r '.chart.result[0].meta.regularMarketPrice')
+        previousClose=$(echo "$results" | jq -r '.chart.result[0].meta.chartPreviousClose')
+        symbol=$(echo "$results" | jq -r '.chart.result[0].meta.symbol')
+        [ "$previousClose" = "null" ] && previousClose="1.0"
+        priceChange=$(awk -v currentPrice="$currentPrice" -v previousClose="$previousClose" \
+                       'BEGIN {printf "%.2f", currentPrice - previousClose}')
+        percentChange=$(awk -v currentPrice="$currentPrice" -v previousClose="$previousClose" \
+                         'BEGIN {printf "%.2f", ((currentPrice - previousClose) / previousClose) * 100}')
+
+        if [ -z "$NO_COLOR" ]; then
+          if (( $(echo "$priceChange >= 0" | bc -l) )); then
+            color="$COLOR_GREEN"
+          else
+            color="$COLOR_RED"
+          fi
+          line=$(printf "%s%-10s%8.2f%10.2f%8s%6.2f%%%s" \
+            "$color" "$symbol" "$currentPrice" "$priceChange" "$color" "$percentChange" "$COLOR_RESET")
+        else
+          line=$(printf "%-10s%8.2f%10.2f%9.2f%%" \
+            "$symbol" "$currentPrice" "$priceChange" "$percentChange")
+        fi
+
+        # Write percent, symbol, and formatted line to tmpfile
+        printf "%.2f\t%s\t%s\n" "$percentChange" "$symbol" "$line"
+      ) &
+    done
+    wait
+  } > "$tmpfile"
+
+  sort -t$'\t' -k1,1nr "$tmpfile" -o "$tmpfile"
+
+  # Sequentially call AI helper (if requested) to control rate
+  while IFS=$'\t' read -r percent symbol line; do
+    if [ -n "$ALERT_TIMEFRAME" ]; then
+            # capture full helper output (debug may print multiple JSON blobs)
+      if [ "$DEBUG_FLAG" -eq 1 ]; then
+              if [ "$RATIONALE_FLAG" -eq 1 ]; then
+                full_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" --debug --rationale 2>/dev/null)
+              else
+                full_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" --debug 2>/dev/null)
+              fi
             else
-              color="$COLOR_RED"
+              if [ "$RATIONALE_FLAG" -eq 1 ]; then
+                full_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" --rationale 2>/dev/null)
+              else
+                full_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" 2>/dev/null)
+              fi
             fi
-            # Build the colored output line
-            line=$(printf "%s%-10s%8.2f%10.2f%8s%6.2f%%%s" \
-              "$color" "$symbol" "$currentPrice" "$priceChange" "$color" "$percentChange" "$COLOR_RESET")
-          else
-            line=$(printf "%-10s%8.2f%10.2f%9.2f%%" \
-              "$symbol" "$currentPrice" "$priceChange" "$percentChange")
-          fi
-  
-          # Prefix with the percent change as the sort key, then a tab and the output line.
-          # If AI alert is requested, call helper and append a short summary
-          if [ -n "$ALERT_TIMEFRAME" ]; then
-            ai_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" 2>/dev/null | tr -d '\\n')
-            printf "%.2f\t%s %s\n" "$percentChange" "$line" "[$ai_out]"
-          else
-            printf "%.2f\t%s\n" "$percentChange" "$line"
-          fi
-        ) &
-      done
-      wait
-    } | sort -t$'\t' -k1,1nr | cut -f2-
-  )
-  echo "$sorted_output"
+            # show debug output (prettified if jq available) when requested
+            if [ "$DEBUG_FLAG" -eq 1 ]; then
+              printf "%s\n" "$full_out"
+            fi
+            # compact result is expected to be the last line
+            ai_out=$(printf "%s" "$full_out" | tail -n1 | tr -d $'\n')
+      # ai_out expected format REC:CONF or REC:CONF|S or REC:CONF|S|RATIONALE
+      rec_part="$ai_out"
+      status_part=""
+      rationale_part=""
+      if echo "$ai_out" | grep -q "|"; then
+        rec_part=$(echo "$ai_out" | cut -d'|' -f1)
+        status_part=$(echo "$ai_out" | cut -d'|' -f2)
+        rationale_part=$(echo "$ai_out" | cut -d'|' -f3-)
+      fi
+      # If rationale requested but missing, try to extract it from debug JSON in full_out
+      if [ "$RATIONALE_FLAG" -eq 1 ] && [ -z "$rationale_part" ]; then
+        # Try robust extraction: first look for unescaped JSON "rationale": "..."
+        # If not found, look for an escaped JSON string containing \"rationale\":\"...\"
+        rat=$(printf "%s" "$full_out" | perl -0777 -ne '
+          if (/"rationale"\s*:\s*"([^"]+)"/s) { print $1; exit }
+          if (/\\"rationale\\"\s*:\s*\\"([^\\"]+)\\"/s) { $s=$1; $s=~s/\\n/ /g; $s=~s/\\"/"/g; print $s; exit }
+        ')
+        if [ -n "$rat" ]; then
+          rationale_part="$rat"
+        fi
+      fi
+      if [ -n "$status_part" ]; then
+        if [ -n "$rationale_part" ]; then
+          printf "%s [%s] [%s] [%s]\n" "$line" "$rec_part" "$status_part" "$rationale_part"
+        else
+          printf "%s [%s] [%s]\n" "$line" "$rec_part" "$status_part"
+        fi
+      else
+        if [ -n "$rationale_part" ]; then
+          printf "%s [%s] [%s]\n" "$line" "$rec_part" "$rationale_part"
+        else
+          printf "%s [%s]\n" "$line" "$rec_part"
+        fi
+      fi
+      sleep "$ALERT_DELAY"
+    else
+      printf "%s\n" "$line"
+    fi
+  done < "$tmpfile"
+  rm -f "$tmpfile"
 else
   # Unsorted mode: Process in parallel and tag each output with its original index.
   # Then sort numerically by index (preserving input order) and remove the index.
-  unsorted_output=$(
-    {
-      for i in "${!SYMBOLS[@]}"; do
-        (
-          # Use the index to preserve original ordering.
-          symbol="${SYMBOLS[$i]}"
-          results=$(fetch_chart "$symbol")
-          currentPrice=$(echo "$results" | jq -r '.chart.result[0].meta.regularMarketPrice')
-          previousClose=$(echo "$results" | jq -r '.chart.result[0].meta.chartPreviousClose')
-          symbol=$(echo "$results" | jq -r '.chart.result[0].meta.symbol')
-          [ "$previousClose" = "null" ] && previousClose="1.0"
-          priceChange=$(awk -v currentPrice="$currentPrice" -v previousClose="$previousClose" \
-                         'BEGIN {printf "%.2f", currentPrice - previousClose}')
-          percentChange=$(awk -v currentPrice="$currentPrice" -v previousClose="$previousClose" \
-                           'BEGIN {printf "%.2f", ((currentPrice - previousClose) / previousClose) * 100}')
-  
-          if [ -z "$NO_COLOR" ]; then
-            if (( $(echo "$priceChange >= 0" | bc -l) )); then
-              color="$COLOR_GREEN"
+  tmpfile=$(mktemp "${TMPDIR%/}/ticker_output.XXXXXX")
+  {
+    for i in "${!SYMBOLS[@]}"; do
+      (
+        # Use the index to preserve original ordering.
+        symbol="${SYMBOLS[$i]}"
+        results=$(fetch_chart "$symbol")
+        currentPrice=$(echo "$results" | jq -r '.chart.result[0].meta.regularMarketPrice')
+        previousClose=$(echo "$results" | jq -r '.chart.result[0].meta.chartPreviousClose')
+        symbol=$(echo "$results" | jq -r '.chart.result[0].meta.symbol')
+        [ "$previousClose" = "null" ] && previousClose="1.0"
+        priceChange=$(awk -v currentPrice="$currentPrice" -v previousClose="$previousClose" \
+                       'BEGIN {printf "%.2f", currentPrice - previousClose}')
+        percentChange=$(awk -v currentPrice="$currentPrice" -v previousClose="$previousClose" \
+                         'BEGIN {printf "%.2f", ((currentPrice - previousClose) / previousClose) * 100}')
+
+        if [ -z "$NO_COLOR" ]; then
+          if (( $(echo "$priceChange >= 0" | bc -l) )); then
+            color="$COLOR_GREEN"
+          else
+            color="$COLOR_RED"
+          fi
+          line=$(printf "%s%-10s%8.2f%10.2f%8s%6.2f%%%s" \
+            "$color" "$symbol" "$currentPrice" "$priceChange" "$color" "$percentChange" "$COLOR_RESET")
+        else
+          line=$(printf "%-10s%8.2f%10.2f%9.2f%%" \
+            "$symbol" "$currentPrice" "$priceChange" "$percentChange")
+        fi
+
+        # Write index, symbol, and formatted line to tmpfile
+        printf "%d\t%s\t%s\n" "$i" "$symbol" "$line"
+      ) &
+    done
+    wait
+  } > "$tmpfile"
+
+  sort -t$'\t' -k1,1n "$tmpfile" -o "$tmpfile"
+
+  # Sequentially call AI helper (if requested) to control rate
+  while IFS=$'\t' read -r idx symbol line; do
+    if [ -n "$ALERT_TIMEFRAME" ]; then
+            # capture full helper output (debug may print multiple JSON blobs)
+      if [ "$DEBUG_FLAG" -eq 1 ]; then
+              if [ "$RATIONALE_FLAG" -eq 1 ]; then
+                full_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" --debug --rationale 2>/dev/null)
+              else
+                full_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" --debug 2>/dev/null)
+              fi
             else
-              color="$COLOR_RED"
+              if [ "$RATIONALE_FLAG" -eq 1 ]; then
+                full_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" --rationale 2>/dev/null)
+              else
+                full_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" 2>/dev/null)
+              fi
             fi
-            line=$(printf "%s%-10s%8.2f%10.2f%8s%6.2f%%%s" \
-              "$color" "$symbol" "$currentPrice" "$priceChange" "$color" "$percentChange" "$COLOR_RESET")
-          else
-            line=$(printf "%-10s%8.2f%10.2f%9.2f%%" \
-              "$symbol" "$currentPrice" "$priceChange" "$percentChange")
-          fi
-  
-          # If AI alert is requested, call helper and append a short summary
-          if [ -n "$ALERT_TIMEFRAME" ]; then
-            ai_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" 2>/dev/null | tr -d '\\n')
-            printf "%d\t%s %s\n" "$i" "$line" "[$ai_out]"
-          else
-            # Prefix with the original index and a tab, then the output line.
-            printf "%d\t%s\n" "$i" "$line"
-          fi
-        ) &
-      done
-      wait
-    } | sort -t$'\t' -k1,1n | cut -f2-
-  )
-  echo "$unsorted_output"
+            if [ "$DEBUG_FLAG" -eq 1 ]; then
+              printf "%s\n" "$full_out"
+            fi
+            ai_out=$(printf "%s" "$full_out" | tail -n1 | tr -d $'\n')
+      # ai_out expected format REC:CONF or REC:CONF|S or REC:CONF|S|RATIONALE
+      rec_part="$ai_out"
+      status_part=""
+      rationale_part=""
+      if echo "$ai_out" | grep -q "|"; then
+        rec_part=$(echo "$ai_out" | cut -d'|' -f1)
+        status_part=$(echo "$ai_out" | cut -d'|' -f2)
+        rationale_part=$(echo "$ai_out" | cut -d'|' -f3-)
+      fi
+      if [ "$RATIONALE_FLAG" -eq 1 ] && [ -z "$rationale_part" ]; then
+        rat=$(printf "%s" "$full_out" | perl -0777 -ne '
+          if (/"rationale"\s*:\s*"([^"]+)"/s) { print $1; exit }
+          if (/\\"rationale\\"\s*:\s*\\"([^\\"]+)\\"/s) { $s=$1; $s=~s/\\n/ /g; $s=~s/\\"/"/g; print $s; exit }
+        ')
+        if [ -n "$rat" ]; then
+          rationale_part="$rat"
+        fi
+      fi
+      if [ -n "$status_part" ]; then
+        if [ -n "$rationale_part" ]; then
+          printf "%s [%s] [%s] [%s]\n" "$line" "$rec_part" "$status_part" "$rationale_part"
+        else
+          printf "%s [%s] [%s]\n" "$line" "$rec_part" "$status_part"
+        fi
+      else
+        if [ -n "$rationale_part" ]; then
+          printf "%s [%s] [%s]\n" "$line" "$rec_part" "$rationale_part"
+        else
+          printf "%s [%s]\n" "$line" "$rec_part"
+        fi
+      fi
+      sleep "$ALERT_DELAY"
+    else
+      printf "%s\n" "$line"
+    fi
+  done < "$tmpfile"
+  rm -f "$tmpfile"
 fi
