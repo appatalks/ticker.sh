@@ -224,8 +224,8 @@ fi
 #-----------------------------------------------------
 if [ "$SORT_RESULTS" = true ]; then
   # Gather parallel results into a temp file, then sort and process sequentially.
-  tmpfile=$(mktemp "${TMPDIR%/}/ticker_output.XXXXXX")
-  {
+  # Collect results in-memory to avoid tempfiles
+  mapfile -t TICKER_OUTPUTS < <(
     for symbol in "${SYMBOLS[@]}"; do
       (
         results=$(fetch_chart "$symbol")
@@ -251,17 +251,19 @@ if [ "$SORT_RESULTS" = true ]; then
             "$symbol" "$currentPrice" "$priceChange" "$percentChange")
         fi
 
-        # Write percent, symbol, and formatted line to tmpfile
+        # Write percent, symbol, and formatted line to the in-memory array
         printf "%.2f\t%s\t%s\n" "$percentChange" "$symbol" "$line"
       ) &
     done
     wait
-  } > "$tmpfile"
+  )
 
-  sort -t$'\t' -k1,1nr "$tmpfile" -o "$tmpfile"
+  # Sort in-memory by percent change (descending)
+  mapfile -t ORDERED_OUTPUTS < <(printf '%s\n' "${TICKER_OUTPUTS[@]}" | sort -t$'\t' -k1,1nr)
 
   # Sequentially call AI helper (if requested) to control rate
-  while IFS=$'\t' read -r percent symbol line; do
+  for entry in "${ORDERED_OUTPUTS[@]}"; do
+    IFS=$'\t' read -r percent symbol line <<< "$entry"
     if [ -n "$ALERT_TIMEFRAME" ]; then
             # capture full helper output (debug may print multiple JSON blobs)
       if [ "$DEBUG_FLAG" -eq 1 ]; then
@@ -297,8 +299,8 @@ if [ "$SORT_RESULTS" = true ]; then
         # Try robust extraction: first look for unescaped JSON "rationale": "..."
         # If not found, look for an escaped JSON string containing \"rationale\":\"...\"
         rat=$(printf "%s" "$full_out" | perl -0777 -ne '
-          if (/"rationale"\s*:\s*"([^"]+)"/s) { print $1; exit }
-          if (/\\"rationale\\"\s*:\s*\\"([^\\"]+)\\"/s) { $s=$1; $s=~s/\\n/ /g; $s=~s/\\"/"/g; print $s; exit }
+          if (/"rationale"\s*:\s*"([^\"]+)"/s) { print $1; exit }
+          if (/\"rationale\"\s*:\s*\"([^\\\"]+)\"/s) { $s=$1; $s=~s/\\n/ /g; $s=~s/\\"/"/g; print $s; exit }
         ')
         if [ -n "$rat" ]; then
           rationale_part="$rat"
@@ -337,8 +339,7 @@ if [ "$SORT_RESULTS" = true ]; then
     else
       printf "%s\n" "$line"
     fi
-  done < "$tmpfile"
-  rm -f "$tmpfile"
+  done
 else
   # Unsorted mode: Process in parallel and tag each output with its original index.
   # Then sort numerically by index (preserving input order) and remove the index.
