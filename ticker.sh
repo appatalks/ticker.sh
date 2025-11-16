@@ -39,7 +39,13 @@ DISPLAY_METALS=false
 SORT_RESULTS=false
 ALERT_TIMEFRAME=""
 RATIONALE_FLAG=0
-CLEANUP_FLAG=0
+# Allow default cleanup behavior to be set via environment variable CLEANUP (true/false)
+CLEANUP=${CLEANUP:-true}
+if [ "$CLEANUP" = "true" ] || [ "$CLEANUP" = "1" ]; then
+  CLEANUP_FLAG=1
+else
+  CLEANUP_FLAG=0
+fi
 show_help() {
   cat <<'HELP'
 Usage: ./ticker.sh [OPTIONS] SYMBOL1 SYMBOL2 ...
@@ -114,7 +120,7 @@ show_version() {
   exit 0
 }
 
-while getopts "gsa:rdC-:hv" opt; do
+while getopts "gsa:rdCnt:-hv" opt; do
   case ${opt} in
     g)
       DISPLAY_METALS=true
