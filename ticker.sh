@@ -61,6 +61,16 @@ Options:
                           response and payload preview).
   -h, --help              Show this help message and exit.
 
+AI status markers:
+  [S] - The AI helper successfully called the model and returned a recommendation.
+  [F] - The AI helper failed to call the model (network or API error) and used
+    local fallback heuristics to produce a recommendation. Confidence may be lower.
+
+Confidence scale:
+  The AI recommendation includes a confidence score from 1 to 10 (integer).
+  10 = highest confidence, 1 = lowest confidence. Use the score to weigh the
+  recommendation.
+
 Notes:
   - To use AI alerts you must provide a working `ai_alert.py` next to this
     script and set your OpenAI API key in the environment or a .env file

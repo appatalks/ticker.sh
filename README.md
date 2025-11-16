@@ -85,6 +85,8 @@ This fork adds an optional AI-powered alerting feature that analyzes recent pric
 - Include `-r` or `--rationale` to print a short rationale after the recommendation.
 - Use `-d` or `--debug` to print the helper payload preview and raw model response for debugging.
 
+Note: If you pass `-r`/`--rationale` without `-a`/`--alert`, the script will default to a `1d` timeframe for the AI alert.
+
 Examples:
 
         # Request AI alert (compact recommendation)
