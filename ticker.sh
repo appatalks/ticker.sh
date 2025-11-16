@@ -243,6 +243,9 @@ fi
 # Default alert delay (seconds) unless provided via environment or .env
 ALERT_DELAY=${ALERT_DELAY:-4}
 
+# Default threads for parallel AI/helper calls (can be overridden in .env)
+THREADS=${THREADS:-5}
+
 # Create session directory for cookies if it doesn't exist
 [ ! -d "$SESSION_DIR" ] && mkdir -m 700 "$SESSION_DIR"
 
@@ -354,30 +357,52 @@ if [ "$SORT_RESULTS" = true ]; then
   mapfile -t ORDERED_OUTPUTS < <(printf '%s\n' "${TICKER_OUTPUTS[@]}" | sort -t$'\t' -k1,1nr)
 
   # Sequentially call AI helper (if requested) to control rate
-  for entry in "${ORDERED_OUTPUTS[@]}"; do
-    IFS=$'\t' read -r percent symbol line <<< "$entry"
-    if [ -n "$ALERT_TIMEFRAME" ]; then
-            # capture full helper output (debug may print multiple JSON blobs)
+  # If alerts requested, run AI helper calls in parallel with a concurrency limit.
+  if [ -n "$ALERT_TIMEFRAME" ]; then
+    TMP_AI_DIR="${SESSION_DIR}/ai"
+    mkdir -p "$TMP_AI_DIR"
+    ai_index=0
+    unset ai_files
+    unset ai_lines
+    for entry in "${ORDERED_OUTPUTS[@]}"; do
+      IFS=$'\t' read -r percent symbol line <<< "$entry"
+      ai_lines[$ai_index]="$line"
+      out_file="$TMP_AI_DIR/out_$ai_index"
+      # Launch helper in background and capture full output to a file
+      (
+        if [ "$DEBUG_FLAG" -eq 1 ]; then
+          if [ "$RATIONALE_FLAG" -eq 1 ]; then
+            "$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" --debug --rationale 2>/dev/null || true
+          else
+            "$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" --debug 2>/dev/null || true
+          fi
+        else
+          if [ "$RATIONALE_FLAG" -eq 1 ]; then
+            "$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" --rationale 2>/dev/null || true
+          else
+            "$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" 2>/dev/null || true
+          fi
+        fi >"$out_file"
+      ) &
+      ai_pids[$ai_index]=$!
+      ai_files[$ai_index]="$out_file"
+      ai_index=$((ai_index + 1))
+      # throttle job launches to THREADS
+      while [ "$(jobs -rp | wc -l)" -ge "$THREADS" ]; do
+        sleep 0.01
+      done
+    done
+
+    # wait for remaining jobs
+    wait
+
+    # Process outputs in original order
+    for idx in $(seq 0 $((ai_index - 1))); do
+      full_out=$(cat "${ai_files[$idx]}" 2>/dev/null || true)
       if [ "$DEBUG_FLAG" -eq 1 ]; then
-              if [ "$RATIONALE_FLAG" -eq 1 ]; then
-                full_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" --debug --rationale 2>/dev/null)
-              else
-                full_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" --debug 2>/dev/null)
-              fi
-            else
-              if [ "$RATIONALE_FLAG" -eq 1 ]; then
-                full_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" --rationale 2>/dev/null)
-              else
-                full_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" 2>/dev/null)
-              fi
-            fi
-            # show debug output (prettified if jq available) when requested
-            if [ "$DEBUG_FLAG" -eq 1 ]; then
-              printf "%s\n" "$full_out"
-            fi
-            # compact result is expected to be the last line
-            ai_out=$(printf "%s" "$full_out" | tail -n1 | tr -d $'\n')
-      # ai_out expected format REC:CONF or REC:CONF|S or REC:CONF|S|RATIONALE
+        printf "%s\n" "$full_out"
+      fi
+      ai_out=$(printf "%s" "$full_out" | tail -n1 | tr -d $'\n')
       rec_part="$ai_out"
       status_part=""
       rationale_part=""
@@ -386,10 +411,7 @@ if [ "$SORT_RESULTS" = true ]; then
         status_part=$(echo "$ai_out" | cut -d'|' -f2)
         rationale_part=$(echo "$ai_out" | cut -d'|' -f3-)
       fi
-      # If rationale requested but missing, try to extract it from debug JSON in full_out
       if [ "$RATIONALE_FLAG" -eq 1 ] && [ -z "$rationale_part" ]; then
-        # Try robust extraction: first look for unescaped JSON "rationale": "..."
-        # If not found, look for an escaped JSON string containing \"rationale\":\"...\"
         rat=$(printf "%s" "$full_out" | perl -0777 -ne '
           if (/"rationale"\s*:\s*"([^\"]+)"/s) { print $1; exit }
           if (/\"rationale\"\s*:\s*\"([^\\\"]+)\"/s) { $s=$1; $s=~s/\\n/ /g; $s=~s/\\"/"/g; print $s; exit }
@@ -398,7 +420,6 @@ if [ "$SORT_RESULTS" = true ]; then
           rationale_part="$rat"
         fi
       fi
-      # Color the recommendation: BUY -> green, SELL -> red (respect NO_COLOR)
       REC_PRINT="$rec_part"
       if [ -z "$NO_COLOR" ]; then
         case "${rec_part%%:*}" in
@@ -413,25 +434,28 @@ if [ "$SORT_RESULTS" = true ]; then
             ;;
         esac
       fi
-
+      line_to_print="${ai_lines[$idx]}"
       if [ -n "$status_part" ]; then
         if [ -n "$rationale_part" ]; then
-          printf "%s [%s] [%s] [%s]\n" "$line" "$REC_PRINT" "$status_part" "$rationale_part"
+          printf "%s [%s] [%s] [%s]\n" "$line_to_print" "$REC_PRINT" "$status_part" "$rationale_part"
         else
-          printf "%s [%s] [%s]\n" "$line" "$REC_PRINT" "$status_part"
+          printf "%s [%s] [%s]\n" "$line_to_print" "$REC_PRINT" "$status_part"
         fi
       else
         if [ -n "$rationale_part" ]; then
-          printf "%s [%s] [%s]\n" "$line" "$REC_PRINT" "$rationale_part"
+          printf "%s [%s] [%s]\n" "$line_to_print" "$REC_PRINT" "$rationale_part"
         else
-          printf "%s [%s]\n" "$line" "$REC_PRINT"
+          printf "%s [%s]\n" "$line_to_print" "$REC_PRINT"
         fi
       fi
       sleep "$ALERT_DELAY"
-    else
+    done
+  else
+    for entry in "${ORDERED_OUTPUTS[@]}"; do
+      IFS=$'\t' read -r percent symbol line <<< "$entry"
       printf "%s\n" "$line"
-    fi
-  done
+    done
+  fi
 else
   # Unsorted mode: Process in parallel and tag each output with its original index.
   # Then sort numerically by index (preserving input order) and remove the index.
