@@ -11,6 +11,9 @@ LC_NUMERIC=C
 SESSION_DIR="${TMPDIR%/}/ticker.sh-$(whoami)"
 COOKIE_FILE="${SESSION_DIR}/cookies.txt"
 
+# Script version (update as appropriate)
+VERSION="ticker.sh dev-ai"
+
 #-----------------------------------------------------
 # Yahoo Finance API configuration
 #-----------------------------------------------------
@@ -37,10 +40,69 @@ SORT_RESULTS=false
 ALERT_TIMEFRAME=""
 
 RATIONALE_FLAG=0
-while getopts "gsa:rd-:" opt; do
+show_help() {
+  cat <<'HELP'
+Usage: ./ticker.sh [OPTIONS] SYMBOL1 SYMBOL2 ...
+
+Fetch live stock and metal prices from Yahoo Finance and optionally request
+an AI alert per symbol.
+
+Options:
+  -g, --metals            Show precious metal spot prices (gold, silver, platinum)
+  -s, --sort              Sort stock symbols by percent gain/loss (descending)
+  -a TIMEFRAME, --alert TIMEFRAME
+                          Request an AI alert for each symbol using the given
+                          timeframe (e.g. 1m,5m,15m,1h,1d). The helper script
+                          `ai_alert.py` performs indicator calculations and
+                          returns a compact recommendation.
+  -r, --rationale         Include a short rationale with AI recommendations.
+                          If used without -a, this implies -a 1d (default).
+  -d, --debug             Print debug output from the AI helper (raw model
+                          response and payload preview).
+  -h, --help              Show this help message and exit.
+
+Notes:
+  - To use AI alerts you must provide a working `ai_alert.py` next to this
+    script and set your OpenAI API key in the environment or a .env file
+    (OPENAI_API_KEY). The default model is configurable via OPENAI_MODEL.
+  - The script rate-limits AI calls using ALERT_DELAY (default 4s).
+  - To disable colored output (useful in logs), set NO_COLOR=1.
+
+Examples:
+  # Print prices for symbols in input order
+  ./ticker.sh AAPL MSFT GOOG
+
+  # Show metals and symbols together
+  ./ticker.sh -g BTC-USD AAPL
+
+  # Request compact AI alerts for each symbol (5 minute timeframe)
+  ./ticker.sh -a 5m AAPL MSFT
+
+  # Include a short rationale and show debug info from the helper
+  ./ticker.sh -a 5m -r -d AAPL
+
+HELP
+  exit 0
+}
+
+show_usage() {
+  printf "Usage: %s [OPTIONS] SYMBOL1 SYMBOL2 ...\n" "${0##*/}" >&2
+  printf "Try '%s --help' for more information.\n" "${0##*/}" >&2
+  exit 1
+}
+
+show_version() {
+  printf "%s\n" "$VERSION"
+  exit 0
+}
+
+while getopts "gsa:rd-:hv" opt; do
   case ${opt} in
     g)
       DISPLAY_METALS=true
+      ;;
+    v)
+      show_version
       ;;
     a)
       ALERT_TIMEFRAME="$OPTARG"
@@ -59,8 +121,14 @@ while getopts "gsa:rd-:" opt; do
     d)
       DEBUG_FLAG=1
       ;;
+    h)
+      show_help
+      ;;
     -)
       case "$OPTARG" in
+        version)
+          show_version
+          ;;
         alert)
           # read next arg as timeframe
           val="${!OPTIND}"
@@ -78,6 +146,9 @@ while getopts "gsa:rd-:" opt; do
             fi
           fi
           ;;
+        help)
+          show_help
+          ;;
         debug)
           DEBUG_FLAG=1
           ;;
@@ -91,8 +162,7 @@ while getopts "gsa:rd-:" opt; do
       SORT_RESULTS=true
       ;;
     *)
-  echo "Usage: $0 [-gsd] SYMBOL1 SYMBOL2 ..."
-      exit 1
+      show_usage
       ;;
   esac
 done
