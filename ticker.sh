@@ -60,6 +60,9 @@ Options:
   -d, --debug             Print debug output from the AI helper (raw model
                           response and payload preview).
   -C, --cleanup           Remove session cookies and run artifacts after the run
+  -n, --no-cleanup        Keep run artifacts (do not remove per-run tempdir)
+  -t THREADS, --threads THREADS
+                         Override the default THREADS concurrency at runtime
   -h, --help              Show this help message and exit.
 
 AI status markers:
@@ -139,6 +142,13 @@ while getopts "gsa:rdC-:hv" opt; do
     d)
       DEBUG_FLAG=1
       ;;
+    n)
+      # keep run artifacts
+      CLEANUP_FLAG=0
+      ;;
+    t)
+      THREADS="$OPTARG"
+      ;;
     h)
       show_help
       ;;
@@ -146,6 +156,16 @@ while getopts "gsa:rdC-:hv" opt; do
       case "$OPTARG" in
         version)
           show_version
+          ;;
+        no-cleanup)
+          CLEANUP_FLAG=0
+          ;;
+        threads)
+          THREADS_VAL="${!OPTIND}"
+          if [ -n "$THREADS_VAL" ] && [ "${THREADS_VAL:0:1}" != "-" ]; then
+            THREADS="$THREADS_VAL"
+            OPTIND=$((OPTIND + 1))
+          fi
           ;;
         alert)
           # read next arg as timeframe
