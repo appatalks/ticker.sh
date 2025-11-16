@@ -38,7 +38,6 @@ SYMBOLS=()
 DISPLAY_METALS=false
 SORT_RESULTS=false
 ALERT_TIMEFRAME=""
-
 RATIONALE_FLAG=0
 show_help() {
   cat <<'HELP'
@@ -59,6 +58,10 @@ Options:
                           If used without -a, this implies -a 1d (default).
   -d, --debug             Print debug output from the AI helper (raw model
                           response and payload preview).
+  -C, --cleanup           Remove session cookies and run artifacts after the run
+  -n, --no-cleanup        Keep run artifacts (do not remove per-run tempdir)
+  -t THREADS, --threads THREADS
+                         Override the default THREADS concurrency at runtime
   -h, --help              Show this help message and exit.
 
 AI status markers:
@@ -91,8 +94,87 @@ Examples:
   # Include a short rationale and show debug info from the helper
   ./ticker.sh -a 5m -r -d AAPL
 
+Note about cleanup:
+  By default the script removes per-run AI temp files after the run. Use
+  `-C/--cleanup` to also remove the saved cookie file used for Yahoo requests.
+
 HELP
   exit 0
+}
+
+# Print a line with recommendation/status, and render a possibly-long rationale
+# as an indented wrapped block beneath the line. This keeps the main table tidy
+# while allowing multi-line rationales to be readable.
+print_with_rationale() {
+  local line="$1"
+  local rec="$2"
+  local status="$3"
+  local rationale="$4"
+  # Compose the main display line (include recommendation/status)
+  local main
+  if [ -n "$status" ]; then
+    main=$(printf "%s [%s] [%s]" "$line" "$rec" "$status")
+  else
+    main=$(printf "%s [%s]" "$line" "$rec")
+  fi
+
+  # If no rationale, just print the main line
+  if [ -z "$rationale" ]; then
+    printf "%s\n" "$main"
+    return
+  fi
+
+  # Clean rationale whitespace
+  local cleaned
+  cleaned=$(printf "%s" "$rationale" | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//;s/[[:space:]]+/ /g')
+
+  # Terminal width and column sizing
+  local cols
+  cols=$(tput cols 2>/dev/null || echo 80)
+  local left_w=56
+  if [ "$cols" -lt 90 ]; then
+    left_w=48
+  fi
+  local right_w=$((cols - left_w - 1))
+  if [ "$right_w" -lt 20 ]; then
+    right_w=20
+    left_w=$((cols - right_w - 1))
+  fi
+
+  # Remove ANSI color sequences when measuring length
+  local esc stripped_len
+  esc=$(printf '\033')
+  stripped_len=$(printf "%s" "$main" | sed -E "s/${esc}\[[0-9;]*m//g" | wc -c | awk '{print $1}')
+
+  # If the main text is longer than the left column, fall back to previous block style
+  if [ "$stripped_len" -gt "$left_w" ]; then
+    printf "%s\n" "$main"
+    printf "%s\n" "    $(printf "%s" "$cleaned" | fold -s -w $((cols - 6)) | sed 's/^/    /')"
+    return
+  fi
+
+  # Compute padding to fill left column
+  local pad=$((left_w - stripped_len))
+  local pad_spaces
+  pad_spaces=$(printf '%*s' "$pad" '')
+
+  # Wrap rationale to right column width
+  local wrapped
+  wrapped=$(printf "%s" "$cleaned" | fold -s -w "$right_w")
+
+  # Print first line: main + padding + first wrapped line
+  local first_line
+  first_line=$(printf "%s" "$wrapped" | sed -n '1p')
+  printf "%s%s %s\n" "$main" "$pad_spaces" "$first_line"
+
+  # Print remaining wrapped lines indented to the right column
+  local rest
+  rest=$(printf "%s" "$wrapped" | sed -n '2,$p')
+  if [ -n "$rest" ]; then
+    local indent
+    indent=$(printf '%*s' $((left_w + 1)) '')
+    printf "%s\n" "$(printf "%s" "$rest" | sed "s/^/${indent}/")"
+  fi
 }
 
 show_usage() {
@@ -106,10 +188,13 @@ show_version() {
   exit 0
 }
 
-while getopts "gsa:rd-:hv" opt; do
+while getopts "gsa:rdCnt:-hv" opt; do
   case ${opt} in
     g)
       DISPLAY_METALS=true
+      ;;
+    C)
+      CLEANUP_FLAG=1
       ;;
     v)
       show_version
@@ -131,6 +216,13 @@ while getopts "gsa:rd-:hv" opt; do
     d)
       DEBUG_FLAG=1
       ;;
+    n)
+      # keep run artifacts
+      CLEANUP_FLAG=0
+      ;;
+    t)
+      THREADS="$OPTARG"
+      ;;
     h)
       show_help
       ;;
@@ -138,6 +230,16 @@ while getopts "gsa:rd-:hv" opt; do
       case "$OPTARG" in
         version)
           show_version
+          ;;
+        no-cleanup)
+          CLEANUP_FLAG=0
+          ;;
+        threads)
+          THREADS_VAL="${!OPTIND}"
+          if [ -n "$THREADS_VAL" ] && [ "${THREADS_VAL:0:1}" != "-" ]; then
+            THREADS="$THREADS_VAL"
+            OPTIND=$((OPTIND + 1))
+          fi
           ;;
         alert)
           # read next arg as timeframe
@@ -155,6 +257,9 @@ while getopts "gsa:rd-:hv" opt; do
               OPTIND=$((OPTIND + 1))
             fi
           fi
+          ;;
+        cleanup)
+          CLEANUP_FLAG=1
           ;;
         help)
           show_help
@@ -218,6 +323,17 @@ if [ -n "$ALERT_TIMEFRAME" ] && [ "${ALERT_TIMEFRAME:0:1}" = "-" ]; then
   esac
 fi
 
+# If -a was provided but the argument doesn't look like a timeframe (e.g. the
+# user ran `-a B`), treat that as "no timeframe provided" and default to 1d.
+# Also restore the mistaken symbol back into the SYMBOLS array so it isn't lost.
+if [ -n "$ALERT_TIMEFRAME" ]; then
+  if ! printf "%s" "$ALERT_TIMEFRAME" | grep -Eq '^[0-9]+(m|h|d|w|y)$'; then
+    # Put the value back as the first symbol (it was probably intended as a symbol)
+    SYMBOLS=("$ALERT_TIMEFRAME" "${SYMBOLS[@]}")
+    ALERT_TIMEFRAME="1d"
+  fi
+fi
+
 if [ ${#SYMBOLS[@]} -eq 0 ] && [ "$DISPLAY_METALS" = false ]; then
   echo "Usage: $0 [-gsd] SYMBOL1 SYMBOL2 ..."
   exit 1
@@ -244,10 +360,71 @@ fi
 ALERT_DELAY=${ALERT_DELAY:-4}
 
 # Default threads for parallel AI/helper calls (can be overridden in .env)
-THREADS=${THREADS:-5}
+# Updated default to match .env.example
+THREADS=${THREADS:-7}
+
+# Allow default cleanup behavior to be set via environment variable CLEANUP (true/false)
+# This must be evaluated after loading .env so file values take effect.
+CLEANUP=${CLEANUP:-true}
+if [ "$CLEANUP" = "true" ] || [ "$CLEANUP" = "1" ]; then
+  CLEANUP_FLAG=1
+else
+  CLEANUP_FLAG=0
+fi
 
 # Create session directory for cookies if it doesn't exist
 [ ! -d "$SESSION_DIR" ] && mkdir -m 700 "$SESSION_DIR"
+
+# Create a per-run temporary directory inside the session dir. Use mktemp
+# so concurrent runs won't clobber each other.
+RUN_DIR=$(mktemp -d "$SESSION_DIR/run.XXXXXXXX")
+umask 077
+
+cleanup_run() {
+  # Remove per-run artifacts only when cleanup is enabled
+  if [ "$CLEANUP_FLAG" -eq 1 ]; then
+    # Informational log to stderr so callers/users see what happened
+    # Remove all per-run directories created under the session dir to avoid
+    # leaving stale artifacts from previous runs.
+    shopt -s nullglob
+    removed_any=0
+    for d in "$SESSION_DIR"/run.*; do
+      if [ -d "$d" ]; then
+        [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: removing run dir %s\n" "$d" >&2
+        rm -rf -- "$d"
+        removed_any=1
+      fi
+    done
+    shopt -u nullglob
+    if [ "$removed_any" -eq 0 ]; then
+      [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: no run.* directories found under %s\n" "$SESSION_DIR" >&2
+    fi
+
+    # Try to remove session-level ai directory if it's empty. If it's non-empty,
+    # leave it intact (it may contain shared cached outputs).
+    if [ -d "$SESSION_DIR/ai" ]; then
+      if rmdir -- "$SESSION_DIR/ai" 2>/dev/null; then
+        [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: removed empty session ai dir %s/ai\n" "$SESSION_DIR" >&2
+      else
+        [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: session ai dir %s/ai not empty; left in place\n" "$SESSION_DIR" >&2
+      fi
+    else
+      [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: no session ai dir to remove (%s/ai)\n" "$SESSION_DIR" >&2
+    fi
+
+    if [ -f "$COOKIE_FILE" ]; then
+      [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: removing cookie file %s\n" "$COOKIE_FILE" >&2
+      rm -f -- "$COOKIE_FILE"
+    else
+      [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: no cookie file to remove (%s)\n" "$COOKIE_FILE" >&2
+    fi
+  else
+    # keep run artifacts for debugging
+    :
+  fi
+}
+
+trap cleanup_run EXIT
 
 #-----------------------------------------------------
 # Function: preflight
@@ -359,15 +536,15 @@ if [ "$SORT_RESULTS" = true ]; then
   # Sequentially call AI helper (if requested) to control rate
   # If alerts requested, run AI helper calls in parallel with a concurrency limit.
   if [ -n "$ALERT_TIMEFRAME" ]; then
-    TMP_AI_DIR="${SESSION_DIR}/ai"
-    mkdir -p "$TMP_AI_DIR"
+  TMP_AI_DIR="$RUN_DIR/ai"
+  mkdir -p "$TMP_AI_DIR"
     ai_index=0
     unset ai_files
     unset ai_lines
     for entry in "${ORDERED_OUTPUTS[@]}"; do
       IFS=$'\t' read -r percent symbol line <<< "$entry"
       ai_lines[$ai_index]="$line"
-      out_file="$TMP_AI_DIR/out_$ai_index"
+  out_file="$TMP_AI_DIR/out_$ai_index"
       # Launch helper in background and capture full output to a file
       (
         if [ "$DEBUG_FLAG" -eq 1 ]; then
@@ -401,6 +578,11 @@ if [ "$SORT_RESULTS" = true ]; then
       full_out=$(cat "${ai_files[$idx]}" 2>/dev/null || true)
       if [ "$DEBUG_FLAG" -eq 1 ]; then
         printf "%s\n" "$full_out"
+        # When debug is enabled the helper may print a payload preview JSON and
+        # not emit the compact recommendation line. In that case we should not
+        # attempt to parse a recommendation from the debug JSON (which would
+        # result in '}' being used as the recommendation). Skip parsing here.
+        continue
       fi
       ai_out=$(printf "%s" "$full_out" | tail -n1 | tr -d $'\n')
       rec_part="$ai_out"
@@ -435,18 +617,11 @@ if [ "$SORT_RESULTS" = true ]; then
         esac
       fi
       line_to_print="${ai_lines[$idx]}"
-      if [ -n "$status_part" ]; then
-        if [ -n "$rationale_part" ]; then
-          printf "%s [%s] [%s] [%s]\n" "$line_to_print" "$REC_PRINT" "$status_part" "$rationale_part"
-        else
-          printf "%s [%s] [%s]\n" "$line_to_print" "$REC_PRINT" "$status_part"
-        fi
-      else
-        if [ -n "$rationale_part" ]; then
-          printf "%s [%s] [%s]\n" "$line_to_print" "$REC_PRINT" "$rationale_part"
-        else
-          printf "%s [%s]\n" "$line_to_print" "$REC_PRINT"
-        fi
+      # Use helper to print the line and format rationale block
+      print_with_rationale "$line_to_print" "$REC_PRINT" "$status_part" "$rationale_part"
+      # Add an extra blank line between symbols when rationale display is enabled
+      if [ "$RATIONALE_FLAG" -eq 1 ]; then
+        printf "\n"
       fi
       sleep "$ALERT_DELAY"
     done
@@ -518,6 +693,9 @@ else
             fi
             if [ "$DEBUG_FLAG" -eq 1 ]; then
               printf "%s\n" "$full_out"
+              # When debug is enabled, avoid parsing the debug payload for a
+              # recommendation; it may not include the compact line. Skip.
+              continue
             fi
             ai_out=$(printf "%s" "$full_out" | tail -n1 | tr -d $'\n')
       # ai_out expected format REC:CONF or REC:CONF|S or REC:CONF|S|RATIONALE
@@ -554,18 +732,11 @@ else
         esac
       fi
 
-      if [ -n "$status_part" ]; then
-        if [ -n "$rationale_part" ]; then
-          printf "%s [%s] [%s] [%s]\n" "$line" "$REC_PRINT" "$status_part" "$rationale_part"
-        else
-          printf "%s [%s] [%s]\n" "$line" "$REC_PRINT" "$status_part"
-        fi
-      else
-        if [ -n "$rationale_part" ]; then
-          printf "%s [%s] [%s]\n" "$line" "$REC_PRINT" "$rationale_part"
-        else
-          printf "%s [%s]\n" "$line" "$REC_PRINT"
-        fi
+      # Use helper to print the line and format rationale block
+      print_with_rationale "$line" "$REC_PRINT" "$status_part" "$rationale_part"
+      # Add an extra blank line between symbols when rationale display is enabled
+      if [ "$RATIONALE_FLAG" -eq 1 ]; then
+        printf "\n"
       fi
       sleep "$ALERT_DELAY"
     else
