@@ -106,6 +106,18 @@ Notes
 - The helper script `ai_alert.py` performs the indicator calculations (RSI, MACD, PPO) locally and sends a deterministic prompt to the OpenAI API. When no API key is present the helper returns a simple RSI-based heuristic (no network call).
 - The script rate-limits AI calls (configurable via `ALERT_DELAY`) when processing multiple symbols to avoid overage.
 
+AI output clarification
+-----------------------
+
+When the script prints an AI recommendation inline it may include a status marker and a confidence score. The markers indicate whether the helper contacted the model:
+
+- [S] — AI helper called the model successfully and returned a recommendation.
+- [F] — AI helper failed to call the model (network or API error) and used local fallback heuristics to produce a recommendation.
+
+Confidence score:
+
+- Recommendations include an integer confidence score from 1 to 10 (10 = highest confidence). Use the score to weigh the recommendation.
+
 
 ### PRO TIP
 
