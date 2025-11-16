@@ -7,6 +7,12 @@ Goals
 - Keep the core script lightweight; offload heavy lifting (indicator computation, AI prompt composition, API calls) to a small, well-tested helper script.
 - Store API keys outside of the repository using environment variables and `.env` files; provide an example `.env.example` file.
 
+Environment & .env handling (important)
+- Never commit a real `.env` file to the repository. Contributors must not modify or add a `.env` file inside the repo. Real API keys and secrets belong only in the developer's local environment or a private secrets store.
+- Use `.env.example` to document configurable variables and safe default values. When changing runtime-config defaults, update only `.env.example` and the README — do not change or include an actual `.env` file in commits.
+- Add `.env` to `.gitignore` (already present) so local `.env` files are not accidentally committed. If you need to share a configuration snippet, update `.env.example` or the README.
+- For local debugging, contributors may copy `.env.example` to `.env` and fill real credentials locally (e.g., `cp .env.example .env && edit .env`). Do not commit that file.
+
 Design constraints
 - Avoid shipping secrets. The repo should include `.env.example` and a `.gitignore` entry for `.env`.
 - The default AI model will be `gpt-5-mini` (or a compatible model name); code should allow switching models via environment variables.

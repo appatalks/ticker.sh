@@ -297,8 +297,41 @@ umask 077
 cleanup_run() {
   # Remove per-run artifacts only when cleanup is enabled
   if [ "$CLEANUP_FLAG" -eq 1 ]; then
-    [ -n "$RUN_DIR" ] && rm -rf "$RUN_DIR"
-    rm -f "$COOKIE_FILE"
+    # Informational log to stderr so callers/users see what happened
+    # Remove all per-run directories created under the session dir to avoid
+    # leaving stale artifacts from previous runs.
+    shopt -s nullglob
+    removed_any=0
+    for d in "$SESSION_DIR"/run.*; do
+      if [ -d "$d" ]; then
+        [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: removing run dir %s\n" "$d" >&2
+        rm -rf -- "$d"
+        removed_any=1
+      fi
+    done
+    shopt -u nullglob
+    if [ "$removed_any" -eq 0 ]; then
+      [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: no run.* directories found under %s\n" "$SESSION_DIR" >&2
+    fi
+
+    # Try to remove session-level ai directory if it's empty. If it's non-empty,
+    # leave it intact (it may contain shared cached outputs).
+    if [ -d "$SESSION_DIR/ai" ]; then
+      if rmdir -- "$SESSION_DIR/ai" 2>/dev/null; then
+        [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: removed empty session ai dir %s/ai\n" "$SESSION_DIR" >&2
+      else
+        [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: session ai dir %s/ai not empty; left in place\n" "$SESSION_DIR" >&2
+      fi
+    else
+      [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: no session ai dir to remove (%s/ai)\n" "$SESSION_DIR" >&2
+    fi
+
+    if [ -f "$COOKIE_FILE" ]; then
+      [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: removing cookie file %s\n" "$COOKIE_FILE" >&2
+      rm -f -- "$COOKIE_FILE"
+    else
+      [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: no cookie file to remove (%s)\n" "$COOKIE_FILE" >&2
+    fi
   else
     # keep run artifacts for debugging
     :
