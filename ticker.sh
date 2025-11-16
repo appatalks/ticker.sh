@@ -38,8 +38,8 @@ SYMBOLS=()
 DISPLAY_METALS=false
 SORT_RESULTS=false
 ALERT_TIMEFRAME=""
-
 RATIONALE_FLAG=0
+CLEANUP_FLAG=0
 show_help() {
   cat <<'HELP'
 Usage: ./ticker.sh [OPTIONS] SYMBOL1 SYMBOL2 ...
@@ -59,6 +59,7 @@ Options:
                           If used without -a, this implies -a 1d (default).
   -d, --debug             Print debug output from the AI helper (raw model
                           response and payload preview).
+  -C, --cleanup           Remove session cookies and run artifacts after the run
   -h, --help              Show this help message and exit.
 
 AI status markers:
@@ -91,6 +92,10 @@ Examples:
   # Include a short rationale and show debug info from the helper
   ./ticker.sh -a 5m -r -d AAPL
 
+Note about cleanup:
+  By default the script removes per-run AI temp files after the run. Use
+  `-C/--cleanup` to also remove the saved cookie file used for Yahoo requests.
+
 HELP
   exit 0
 }
@@ -106,10 +111,13 @@ show_version() {
   exit 0
 }
 
-while getopts "gsa:rd-:hv" opt; do
+while getopts "gsa:rdC-:hv" opt; do
   case ${opt} in
     g)
       DISPLAY_METALS=true
+      ;;
+    C)
+      CLEANUP_FLAG=1
       ;;
     v)
       show_version
@@ -155,6 +163,9 @@ while getopts "gsa:rd-:hv" opt; do
               OPTIND=$((OPTIND + 1))
             fi
           fi
+          ;;
+        cleanup)
+          CLEANUP_FLAG=1
           ;;
         help)
           show_help
@@ -249,6 +260,21 @@ THREADS=${THREADS:-7}
 
 # Create session directory for cookies if it doesn't exist
 [ ! -d "$SESSION_DIR" ] && mkdir -m 700 "$SESSION_DIR"
+
+# Create a per-run temporary directory inside the session dir. Use mktemp
+# so concurrent runs won't clobber each other.
+RUN_DIR=$(mktemp -d "$SESSION_DIR/run.XXXXXXXX")
+umask 077
+
+cleanup_run() {
+  # Remove per-run artifacts
+  [ -n "$RUN_DIR" ] && rm -rf "$RUN_DIR"
+  if [ "$CLEANUP_FLAG" -eq 1 ]; then
+    rm -f "$COOKIE_FILE"
+  fi
+}
+
+trap cleanup_run EXIT
 
 #-----------------------------------------------------
 # Function: preflight
@@ -360,15 +386,15 @@ if [ "$SORT_RESULTS" = true ]; then
   # Sequentially call AI helper (if requested) to control rate
   # If alerts requested, run AI helper calls in parallel with a concurrency limit.
   if [ -n "$ALERT_TIMEFRAME" ]; then
-    TMP_AI_DIR="${SESSION_DIR}/ai"
-    mkdir -p "$TMP_AI_DIR"
+  TMP_AI_DIR="$RUN_DIR/ai"
+  mkdir -p "$TMP_AI_DIR"
     ai_index=0
     unset ai_files
     unset ai_lines
     for entry in "${ORDERED_OUTPUTS[@]}"; do
       IFS=$'\t' read -r percent symbol line <<< "$entry"
       ai_lines[$ai_index]="$line"
-      out_file="$TMP_AI_DIR/out_$ai_index"
+  out_file="$TMP_AI_DIR/out_$ai_index"
       # Launch helper in background and capture full output to a file
       (
         if [ "$DEBUG_FLAG" -eq 1 ]; then
