@@ -244,7 +244,8 @@ fi
 ALERT_DELAY=${ALERT_DELAY:-4}
 
 # Default threads for parallel AI/helper calls (can be overridden in .env)
-THREADS=${THREADS:-5}
+# Updated default to match .env.example
+THREADS=${THREADS:-7}
 
 # Create session directory for cookies if it doesn't exist
 [ ! -d "$SESSION_DIR" ] && mkdir -m 700 "$SESSION_DIR"
