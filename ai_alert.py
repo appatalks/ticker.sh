@@ -281,6 +281,47 @@ def build_prompt(symbol: str, timeframe: str, indicators: Dict[str, object]) -> 
     )
 
 
+def compute_confidence_from_indicators(indicators: Dict[str, object]) -> int:
+    """Compute a 1-10 confidence score from multiple indicators (rsi, macd_hist, ppo).
+    Returns an int between 1 and 10. The function normalizes each indicator to a 0..1
+    contribution and combines them with weights. Missing values reduce the score
+    gracefully.
+    """
+    try:
+        r = indicators.get('rsi')
+        macd_h = indicators.get('macd_hist')
+        ppo_v = indicators.get('ppo')
+    except Exception:
+        return 5
+
+    # RSI contribution: distance from neutral (50) scaled to 0..1
+    r_score = 0.0
+    if isinstance(r, (int, float)):
+        r_score = min(1.0, abs(r - 50.0) / 50.0)
+
+    # MACD histogram contribution: larger absolute histogram -> stronger signal
+    macd_score = 0.0
+    if isinstance(macd_h, (int, float)):
+        # scale into 0..1 using a soft normalization; avoids division by tiny numbers
+        macd_score = min(1.0, abs(macd_h) / (abs(macd_h) + 1.0))
+
+    # PPO contribution: percent-based indicator; treat values around 10% as strong
+    ppo_score = 0.0
+    if isinstance(ppo_v, (int, float)):
+        ppo_score = min(1.0, abs(ppo_v) / 10.0)
+
+    # Weights chosen to favor RSI while still using MACD histogram and PPO
+    w_rsi = 0.5
+    w_macd = 0.3
+    w_ppo = 0.2
+
+    combined = (w_rsi * r_score) + (w_macd * macd_score) + (w_ppo * ppo_score)
+
+    # Map combined 0..1 to 1..10 integer
+    conf = int(max(1, min(10, round(combined * 9) + 1)))
+    return conf
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('symbol')
@@ -411,25 +452,27 @@ def main():
                 'meta': last_meta,
             }, indent=2))
         # Heuristic fallback (same logic as the no-API-key path) with status F
-        r = rsi(closes)[-1] if rsi(closes) else None
-        if r is None:
+        # Compute last indicators and derive a multi-indicator confidence
+        r_val = rsi(closes)[-1] if rsi(closes) else None
+        macd_res_local = macd(closes)
+        macd_hist_val = macd_res_local['hist'][-1] if macd_res_local['hist'] else None
+        ppo_val = ppo(closes)[-1] if ppo(closes) else None
+        indicators_local = {'rsi': r_val, 'macd_hist': macd_hist_val, 'ppo': ppo_val}
+        if r_val is None and macd_hist_val is None and ppo_val is None:
             if args.rationale:
-                print('HOLD:1|F|No RSI data available')
+                print('HOLD:1|F|No indicator data available')
             else:
                 print('HOLD:1|F')
             sys.exit(0)
-        rationale = None
-        if r > 70:
-            conf = int(min(10, round((r - 70) / 3 + 5)))
-            rationale = 'RSI over 70 indicates overbought'
+        conf = compute_confidence_from_indicators(indicators_local)
+        # Determine a basic recommendation from RSI if available
+        if isinstance(r_val, (int, float)) and r_val > 70:
             out = f"SELL:{conf}|F"
-        elif r < 30:
-            conf = int(min(10, round((30 - r) / 3 + 5)))
-            rationale = 'RSI below 30 indicates oversold'
+            rationale = 'RSI over 70 indicates overbought'
+        elif isinstance(r_val, (int, float)) and r_val < 30:
             out = f"BUY:{conf}|F"
+            rationale = 'RSI below 30 indicates oversold'
         else:
-            conf = int(max(1, round(10 - abs(50 - r) / 5)))
-            rationale = 'RSI neutral'
             out = f"HOLD:{conf}|F"
         if args.rationale:
             r_text = ' '.join(rationale.split()) if rationale else ''
@@ -482,26 +525,17 @@ def main():
 
         # For testing: return a compact summary based on indicators (no OpenAI call)
         # Heuristic: RSI > 70 -> sell; RSI < 30 -> buy; else hold. Confidence scaled from distance.
+        # Multi-indicator heuristic when no API key: compute confidence from indicators
+        conf = compute_confidence_from_indicators(computed)
         r = computed.get('rsi')
-        if r is None:
-            # mark as failure (no AI used)
-            if args.rationale:
-                print('HOLD:1|F|No RSI data available')
-            else:
-                print('HOLD:1|F')
-            sys.exit(0)
-        # generate a short rationale for the heuristic path
         rationale = None
-        if r > 70:
-            conf = int(min(10, round((r - 70) / 3 + 5)))
+        if isinstance(r, (int, float)) and r > 70:
             rationale = 'RSI over 70 indicates overbought'
             out = f"SELL:{conf}|F"
-        elif r < 30:
-            conf = int(min(10, round((30 - r) / 3 + 5)))
+        elif isinstance(r, (int, float)) and r < 30:
             rationale = 'RSI below 30 indicates oversold'
             out = f"BUY:{conf}|F"
         else:
-            conf = int(max(1, round(10 - abs(50 - r) / 5)))
             rationale = 'RSI neutral'
             out = f"HOLD:{conf}|F"
         if args.rationale:
@@ -665,25 +699,26 @@ def main():
             up = (assistant_text or ans or '')
             upu = up.upper()
             import re
-            if 'BUY' in upu:
+            if 'BUY' in upu or 'SELL' in upu or 'HOLD' in upu:
+                # Attempt to extract a numeric confidence from assistant text; if none,
+                # synthesize from indicators we computed earlier.
                 m = re.search(r"(\d{1,2})", upu)
-                conf = int(m.group(1)) if m else 5
-                status = 'S' if finish_reason != 'length' else 'F'
-                out_rec, out_conf = 'BUY', conf
-                # try to pull a short rationale from assistant_text (first sentence)
-                out_rationale = extract_short_rationale_from_text(assistant_text or '')
-            elif 'SELL' in upu:
-                m = re.search(r"(\d{1,2})", upu)
-                conf = int(m.group(1)) if m else 5
-                status = 'S' if finish_reason != 'length' else 'F'
-                out_rec, out_conf = 'SELL', conf
-                out_rationale = extract_short_rationale_from_text(assistant_text or '')
-            elif 'HOLD' in upu:
-                status = 'S' if finish_reason != 'length' else 'F'
-                out_rec, out_conf = 'HOLD', 5
+                if m:
+                    conf = int(m.group(1))
+                else:
+                    conf = compute_confidence_from_indicators(computed)
+                if 'BUY' in upu:
+                    status = 'S' if finish_reason != 'length' else 'F'
+                    out_rec, out_conf = 'BUY', conf
+                elif 'SELL' in upu:
+                    status = 'S' if finish_reason != 'length' else 'F'
+                    out_rec, out_conf = 'SELL', conf
+                else:
+                    status = 'S' if finish_reason != 'length' else 'F'
+                    out_rec, out_conf = 'HOLD', conf
                 out_rationale = extract_short_rationale_from_text(assistant_text or '')
             else:
-                out_rec, out_conf, status = 'HOLD', 5, 'F'
+                out_rec, out_conf, status = 'HOLD', compute_confidence_from_indicators(computed), 'F'
 
         # If the user requested rationale but none was returned, synthesize a short one from indicators
         if args.rationale and not out_rationale:
