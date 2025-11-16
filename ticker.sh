@@ -39,6 +39,85 @@ DISPLAY_METALS=false
 SORT_RESULTS=false
 ALERT_TIMEFRAME=""
 RATIONALE_FLAG=0
+
+# Preprocess long GNU-style options (e.g. --help, --debug, --alert) into short
+# options so we can rely on getopts. This handles --opt and --opt VALUE forms.
+if [ "$#" -gt 0 ]; then
+  _args=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --help)
+        _args+=( -h )
+        shift
+        ;;
+      --debug)
+        _args+=( -d )
+        shift
+        ;;
+      --metals)
+        _args+=( -g )
+        shift
+        ;;
+      --sort)
+        _args+=( -s )
+        shift
+        ;;
+      --alert)
+        shift
+        if [ -n "$1" ] && [ "${1:0:1}" != "-" ]; then
+          _args+=( -a "$1" )
+          shift
+        else
+          # keep -a without arg; let getopts handle defaulting later
+          _args+=( -a )
+        fi
+        ;;
+      --rationale)
+        _args+=( -r )
+        shift
+        ;;
+      --cleanup)
+        _args+=( -C )
+        shift
+        ;;
+      --no-cleanup)
+        _args+=( -n )
+        shift
+        ;;
+      --threads)
+        shift
+        if [ -n "$1" ] && [ "${1:0:1}" != "-" ]; then
+          _args+=( -t "$1" )
+          shift
+        else
+          echo "Missing value for --threads" >&2
+          exit 1
+        fi
+        ;;
+      --version)
+        _args+=( -v )
+        shift
+        ;;
+      --)
+        shift
+        while [ "$#" -gt 0 ]; do
+          _args+=( "$1" )
+          shift
+        done
+        ;;
+      --*)
+        echo "Unknown option $1" >&2
+        exit 1
+        ;;
+      *)
+        _args+=( "$1" )
+        shift
+        ;;
+    esac
+  done
+  # replace positional parameters with the transformed args
+  set -- "${_args[@]}"
+fi
 show_help() {
   cat <<'HELP'
 Usage: ./ticker.sh [OPTIONS] SYMBOL1 SYMBOL2 ...
@@ -680,32 +759,53 @@ else
   # Order by index to preserve original ordering
   mapfile -t ORDERED_OUTPUTS < <(printf '%s\n' "${TICKER_OUTPUTS[@]}" | sort -t$'\t' -k1,1n)
 
-  # Sequentially call AI helper (if requested) to control rate
-  for entry in "${ORDERED_OUTPUTS[@]}"; do
-    IFS=$'\t' read -r idx symbol line <<< "$entry"
-    if [ -n "$ALERT_TIMEFRAME" ]; then
-            # capture full helper output (debug may print multiple JSON blobs)
+  # Parallelize AI helper calls while preserving input order for unsorted mode.
+  if [ -n "$ALERT_TIMEFRAME" ]; then
+    TMP_AI_DIR="$RUN_DIR/ai"
+    mkdir -p "$TMP_AI_DIR"
+    ai_index=0
+    unset ai_files
+    unset ai_lines
+    for entry in "${ORDERED_OUTPUTS[@]}"; do
+      IFS=$'\t' read -r idx symbol line <<< "$entry"
+      ai_lines[$ai_index]="$line"
+      out_file="$TMP_AI_DIR/out_$ai_index"
+      (
+        if [ "$DEBUG_FLAG" -eq 1 ]; then
+          if [ "$RATIONALE_FLAG" -eq 1 ]; then
+            "$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" --debug --rationale 2>/dev/null || true
+          else
+            "$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" --debug 2>/dev/null || true
+          fi
+        else
+          if [ "$RATIONALE_FLAG" -eq 1 ]; then
+            "$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" --rationale 2>/dev/null || true
+          else
+            "$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" 2>/dev/null || true
+          fi
+        fi
+      ) >"$out_file" &
+      ai_pids[$ai_index]=$!
+      ai_files[$ai_index]="$out_file"
+      ai_index=$((ai_index + 1))
+      # throttle job launches to THREADS
+      while [ "$(jobs -rp | wc -l)" -ge "$THREADS" ]; do
+        sleep 0.01
+      done
+    done
+
+    # wait for remaining jobs
+    wait
+
+    # Process outputs in original order
+    for idx in $(seq 0 $((ai_index - 1))); do
+      full_out=$(cat "${ai_files[$idx]}" 2>/dev/null || true)
       if [ "$DEBUG_FLAG" -eq 1 ]; then
-              if [ "$RATIONALE_FLAG" -eq 1 ]; then
-                full_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" --debug --rationale 2>/dev/null)
-              else
-                full_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" --debug 2>/dev/null)
-              fi
-            else
-              if [ "$RATIONALE_FLAG" -eq 1 ]; then
-                full_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" --rationale 2>/dev/null)
-              else
-                full_out=$("$AI_HELPER" "$symbol" "$ALERT_TIMEFRAME" 2>/dev/null)
-              fi
-            fi
-            if [ "$DEBUG_FLAG" -eq 1 ]; then
-              printf "%s\n" "$full_out"
-              # When debug is enabled, avoid parsing the debug payload for a
-              # recommendation; it may not include the compact line. Skip.
-              continue
-            fi
-            ai_out=$(printf "%s" "$full_out" | tail -n1 | tr -d $'\n')
-      # ai_out expected format REC:CONF or REC:CONF|S or REC:CONF|S|RATIONALE
+        printf "%s\n" "$full_out"
+        # When debug is enabled, don't attempt parsing compact recommendation
+        continue
+      fi
+      ai_out=$(printf "%s" "$full_out" | tail -n1 | tr -d $'\n')
       rec_part="$ai_out"
       status_part=""
       rationale_part=""
@@ -717,13 +817,12 @@ else
       if [ "$RATIONALE_FLAG" -eq 1 ] && [ -z "$rationale_part" ]; then
         rat=$(printf "%s" "$full_out" | perl -0777 -ne '
           if (/"rationale"\s*:\s*"([^\"]+)"/s) { print $1; exit }
-          if (/\"rationale\"\s*:\s*\"([^\\\"]+)\"/s) { $s=$1; $s=~s/\\n/ /g; $s=~s/\\"/"/g; print $s; exit }
+          if (/"rationale"\s*:\s*"([^\\\"]+)"/s) { $s=$1; $s=~s/\\n/ /g; $s=~s/\\"/"/g; print $s; exit }
         ')
         if [ -n "$rat" ]; then
           rationale_part="$rat"
         fi
       fi
-      # Color the recommendation: BUY -> green, SELL -> red (respect NO_COLOR)
       REC_PRINT="$rec_part"
       if [ -z "$NO_COLOR" ]; then
         case "${rec_part%%:*}" in
@@ -738,16 +837,17 @@ else
             ;;
         esac
       fi
-
-      # Use helper to print the line and format rationale block
-      print_with_rationale "$line" "$REC_PRINT" "$status_part" "$rationale_part"
-      # Add an extra blank line between symbols when rationale display is enabled
+      line_to_print="${ai_lines[$idx]}"
+      print_with_rationale "$line_to_print" "$REC_PRINT" "$status_part" "$rationale_part"
       if [ "$RATIONALE_FLAG" -eq 1 ]; then
         printf "\n"
       fi
       sleep "$ALERT_DELAY"
-    else
+    done
+  else
+    for entry in "${ORDERED_OUTPUTS[@]}"; do
+      IFS=$'\t' read -r idx symbol line <<< "$entry"
       printf "%s\n" "$line"
-    fi
-  done
+    done
+  fi
 fi
