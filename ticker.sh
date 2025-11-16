@@ -324,13 +324,20 @@ if [ -n "$ALERT_TIMEFRAME" ] && [ "${ALERT_TIMEFRAME:0:1}" = "-" ]; then
 fi
 
 # If -a was provided but the argument doesn't look like a timeframe (e.g. the
-# user ran `-a B`), treat that as "no timeframe provided" and default to 1d.
-# Also restore the mistaken symbol back into the SYMBOLS array so it isn't lost.
+# user ran `-a B`), treat that as "no timeframe provided" and default to the
+# ALERT_DEFAULT if set, otherwise fall back to 1d. Also restore the mistaken
+# symbol back into the SYMBOLS array so it isn't lost.
+ALERT_DEFAULT=${ALERT_DEFAULT:-1d}
 if [ -n "$ALERT_TIMEFRAME" ]; then
   if ! printf "%s" "$ALERT_TIMEFRAME" | grep -Eq '^[0-9]+(m|h|d|w|y)$'; then
     # Put the value back as the first symbol (it was probably intended as a symbol)
     SYMBOLS=("$ALERT_TIMEFRAME" "${SYMBOLS[@]}")
-    ALERT_TIMEFRAME="1d"
+    # Use ALERT_DEFAULT if it looks valid, otherwise fallback to 1d
+    if printf "%s" "$ALERT_DEFAULT" | grep -Eq '^[0-9]+(m|h|d|w|y)$'; then
+      ALERT_TIMEFRAME="$ALERT_DEFAULT"
+    else
+      ALERT_TIMEFRAME="1d"
+    fi
   fi
 fi
 
