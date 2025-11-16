@@ -427,9 +427,21 @@ fi
 
 # If alert timeframe provided, ensure python helper exists
 AI_HELPER="$(dirname "$0")/ai_alert.py"
-if [ -n "$ALERT_TIMEFRAME" ] && [ ! -x "$AI_HELPER" ]; then
-  # Try to make it executable
-  [ -f "$AI_HELPER" ] && chmod +x "$AI_HELPER"
+if [ -n "$ALERT_TIMEFRAME" ]; then
+  if [ -f "$AI_HELPER" ]; then
+    # Try to make it executable if it isn't already
+    [ ! -x "$AI_HELPER" ] && chmod +x "$AI_HELPER"
+  else
+    # Short, actionable message and soft-fail: continue without AI
+    cat >&2 <<'MSG'
+The -a/--alert and -r/--rationale options require the helper script
+'ai_alert.py' to be present next to this script and executable.
+Visit github.com/appatalks/ticker.sh for more information.
+MSG
+    # Disable AI behavior for this run
+    ALERT_TIMEFRAME=""
+    RATIONALE_FLAG=0
+  fi
 fi
 # Load environment overrides from a .env file located next to the script, if present.
 # Use allexport so variables defined in .env become exported into the script's environment.
