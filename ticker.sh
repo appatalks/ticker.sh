@@ -39,13 +39,6 @@ DISPLAY_METALS=false
 SORT_RESULTS=false
 ALERT_TIMEFRAME=""
 RATIONALE_FLAG=0
-# Allow default cleanup behavior to be set via environment variable CLEANUP (true/false)
-CLEANUP=${CLEANUP:-true}
-if [ "$CLEANUP" = "true" ] || [ "$CLEANUP" = "1" ]; then
-  CLEANUP_FLAG=1
-else
-  CLEANUP_FLAG=0
-fi
 show_help() {
   cat <<'HELP'
 Usage: ./ticker.sh [OPTIONS] SYMBOL1 SYMBOL2 ...
@@ -284,6 +277,15 @@ ALERT_DELAY=${ALERT_DELAY:-4}
 # Updated default to match .env.example
 THREADS=${THREADS:-7}
 
+# Allow default cleanup behavior to be set via environment variable CLEANUP (true/false)
+# This must be evaluated after loading .env so file values take effect.
+CLEANUP=${CLEANUP:-true}
+if [ "$CLEANUP" = "true" ] || [ "$CLEANUP" = "1" ]; then
+  CLEANUP_FLAG=1
+else
+  CLEANUP_FLAG=0
+fi
+
 # Create session directory for cookies if it doesn't exist
 [ ! -d "$SESSION_DIR" ] && mkdir -m 700 "$SESSION_DIR"
 
@@ -293,10 +295,13 @@ RUN_DIR=$(mktemp -d "$SESSION_DIR/run.XXXXXXXX")
 umask 077
 
 cleanup_run() {
-  # Remove per-run artifacts
-  [ -n "$RUN_DIR" ] && rm -rf "$RUN_DIR"
+  # Remove per-run artifacts only when cleanup is enabled
   if [ "$CLEANUP_FLAG" -eq 1 ]; then
+    [ -n "$RUN_DIR" ] && rm -rf "$RUN_DIR"
     rm -f "$COOKIE_FILE"
+  else
+    # keep run artifacts for debugging
+    :
   fi
 }
 
