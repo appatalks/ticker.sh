@@ -38,6 +38,7 @@ SYMBOLS=()
 DISPLAY_METALS=false
 SORT_RESULTS=false
 ALERT_TIMEFRAME=""
+
 RATIONALE_FLAG=0
 show_help() {
   cat <<'HELP'
@@ -58,10 +59,6 @@ Options:
                           If used without -a, this implies -a 1d (default).
   -d, --debug             Print debug output from the AI helper (raw model
                           response and payload preview).
-  -C, --cleanup           Remove session cookies and run artifacts after the run
-  -n, --no-cleanup        Keep run artifacts (do not remove per-run tempdir)
-  -t THREADS, --threads THREADS
-                         Override the default THREADS concurrency at runtime
   -h, --help              Show this help message and exit.
 
 AI status markers:
@@ -94,10 +91,6 @@ Examples:
   # Include a short rationale and show debug info from the helper
   ./ticker.sh -a 5m -r -d AAPL
 
-Note about cleanup:
-  By default the script removes per-run AI temp files after the run. Use
-  `-C/--cleanup` to also remove the saved cookie file used for Yahoo requests.
-
 HELP
   exit 0
 }
@@ -113,13 +106,10 @@ show_version() {
   exit 0
 }
 
-while getopts "gsa:rdCnt:-hv" opt; do
+while getopts "gsa:rd-:hv" opt; do
   case ${opt} in
     g)
       DISPLAY_METALS=true
-      ;;
-    C)
-      CLEANUP_FLAG=1
       ;;
     v)
       show_version
@@ -141,13 +131,6 @@ while getopts "gsa:rdCnt:-hv" opt; do
     d)
       DEBUG_FLAG=1
       ;;
-    n)
-      # keep run artifacts
-      CLEANUP_FLAG=0
-      ;;
-    t)
-      THREADS="$OPTARG"
-      ;;
     h)
       show_help
       ;;
@@ -155,16 +138,6 @@ while getopts "gsa:rdCnt:-hv" opt; do
       case "$OPTARG" in
         version)
           show_version
-          ;;
-        no-cleanup)
-          CLEANUP_FLAG=0
-          ;;
-        threads)
-          THREADS_VAL="${!OPTIND}"
-          if [ -n "$THREADS_VAL" ] && [ "${THREADS_VAL:0:1}" != "-" ]; then
-            THREADS="$THREADS_VAL"
-            OPTIND=$((OPTIND + 1))
-          fi
           ;;
         alert)
           # read next arg as timeframe
@@ -182,9 +155,6 @@ while getopts "gsa:rdCnt:-hv" opt; do
               OPTIND=$((OPTIND + 1))
             fi
           fi
-          ;;
-        cleanup)
-          CLEANUP_FLAG=1
           ;;
         help)
           show_help
@@ -274,71 +244,10 @@ fi
 ALERT_DELAY=${ALERT_DELAY:-4}
 
 # Default threads for parallel AI/helper calls (can be overridden in .env)
-# Updated default to match .env.example
-THREADS=${THREADS:-7}
-
-# Allow default cleanup behavior to be set via environment variable CLEANUP (true/false)
-# This must be evaluated after loading .env so file values take effect.
-CLEANUP=${CLEANUP:-true}
-if [ "$CLEANUP" = "true" ] || [ "$CLEANUP" = "1" ]; then
-  CLEANUP_FLAG=1
-else
-  CLEANUP_FLAG=0
-fi
+THREADS=${THREADS:-5}
 
 # Create session directory for cookies if it doesn't exist
 [ ! -d "$SESSION_DIR" ] && mkdir -m 700 "$SESSION_DIR"
-
-# Create a per-run temporary directory inside the session dir. Use mktemp
-# so concurrent runs won't clobber each other.
-RUN_DIR=$(mktemp -d "$SESSION_DIR/run.XXXXXXXX")
-umask 077
-
-cleanup_run() {
-  # Remove per-run artifacts only when cleanup is enabled
-  if [ "$CLEANUP_FLAG" -eq 1 ]; then
-    # Informational log to stderr so callers/users see what happened
-    # Remove all per-run directories created under the session dir to avoid
-    # leaving stale artifacts from previous runs.
-    shopt -s nullglob
-    removed_any=0
-    for d in "$SESSION_DIR"/run.*; do
-      if [ -d "$d" ]; then
-        [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: removing run dir %s\n" "$d" >&2
-        rm -rf -- "$d"
-        removed_any=1
-      fi
-    done
-    shopt -u nullglob
-    if [ "$removed_any" -eq 0 ]; then
-      [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: no run.* directories found under %s\n" "$SESSION_DIR" >&2
-    fi
-
-    # Try to remove session-level ai directory if it's empty. If it's non-empty,
-    # leave it intact (it may contain shared cached outputs).
-    if [ -d "$SESSION_DIR/ai" ]; then
-      if rmdir -- "$SESSION_DIR/ai" 2>/dev/null; then
-        [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: removed empty session ai dir %s/ai\n" "$SESSION_DIR" >&2
-      else
-        [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: session ai dir %s/ai not empty; left in place\n" "$SESSION_DIR" >&2
-      fi
-    else
-      [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: no session ai dir to remove (%s/ai)\n" "$SESSION_DIR" >&2
-    fi
-
-    if [ -f "$COOKIE_FILE" ]; then
-      [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: removing cookie file %s\n" "$COOKIE_FILE" >&2
-      rm -f -- "$COOKIE_FILE"
-    else
-      [ "$DEBUG_FLAG" -eq 1 ] && printf "ticker.sh: cleanup: no cookie file to remove (%s)\n" "$COOKIE_FILE" >&2
-    fi
-  else
-    # keep run artifacts for debugging
-    :
-  fi
-}
-
-trap cleanup_run EXIT
 
 #-----------------------------------------------------
 # Function: preflight
@@ -450,15 +359,15 @@ if [ "$SORT_RESULTS" = true ]; then
   # Sequentially call AI helper (if requested) to control rate
   # If alerts requested, run AI helper calls in parallel with a concurrency limit.
   if [ -n "$ALERT_TIMEFRAME" ]; then
-  TMP_AI_DIR="$RUN_DIR/ai"
-  mkdir -p "$TMP_AI_DIR"
+    TMP_AI_DIR="${SESSION_DIR}/ai"
+    mkdir -p "$TMP_AI_DIR"
     ai_index=0
     unset ai_files
     unset ai_lines
     for entry in "${ORDERED_OUTPUTS[@]}"; do
       IFS=$'\t' read -r percent symbol line <<< "$entry"
       ai_lines[$ai_index]="$line"
-  out_file="$TMP_AI_DIR/out_$ai_index"
+      out_file="$TMP_AI_DIR/out_$ai_index"
       # Launch helper in background and capture full output to a file
       (
         if [ "$DEBUG_FLAG" -eq 1 ]; then
