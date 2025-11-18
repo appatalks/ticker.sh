@@ -77,13 +77,57 @@ If you are running the script in an environment that doesn't support color or if
 
     NO_COLOR=1 ./ticker.sh AAPL MSFT GOOG BTC-USD
 
+### AI Alerts (Optional - with ai_alert.py)
+
+This fork adds an optional AI-powered alerting feature that analyzes recent price indicators and returns a compact recommendation. Take advice with CAUTION.
+
+- Trigger an alert for each symbol with a timeframe using `-a TIMEFRAME` or `--alert TIMEFRAME` (e.g. `1m`, `5m`, `1h`, `1d`).
+- Include `-r` or `--rationale` to print a short rationale after the recommendation.
+- Use `-d` or `--debug` to print the helper payload preview and raw model response for debugging.
+
+Note: If you pass `-r`/`--rationale` without `-a`/`--alert`, the script will default to a `1d` timeframe for the AI alert.
+
+Examples:
+
+        # Request AI alert (compact recommendation)
+        ./ticker.sh -a 5m RXT
+
+        # Include rationale and debug info
+        ./ticker.sh -a 5m -r -d RXT
+
+Environment and configuration
+
+- Place your OpenAI API key in a `.env` file or export `OPENAI_API_KEY`.
+- Optional environment variables:
+    - `OPENAI_MODEL` (default: `gpt-5-nano`)
+    - `OPENAI_MAX_COMPLETION_TOKENS` (default: `650`)
+    - `OPENAI_USE_RESPONSES` (set to `1` to use the Responses API - recommended; default `0`)
+
+Notes
+
+- The helper script `ai_alert.py` performs the indicator calculations (RSI, MACD, PPO) locally and sends a deterministic prompt to the OpenAI API. When no API key is present the helper returns a simple RSI-based heuristic (no network call).
+- The script rate-limits AI calls (configurable via `ALERT_DELAY`) when processing multiple symbols to avoid overage.
+
+AI output clarification
+-----------------------
+
+When the script prints an AI recommendation inline it may include a status marker and a confidence score. The markers indicate whether the helper contacted the model:
+
+- [S] — AI helper called the model successfully and returned a recommendation.
+- [F] — AI helper failed to call the model (network or API error) and used local fallback heuristics to produce a recommendation.
+
+Confidence score:
+
+- Recommendations include an integer confidence score from 1 to 10 (10 = highest confidence). Use the score to weigh the recommendation.
+
+
 ### PRO TIP
 
 > [!NOTE]
-> Use a foreloop for continious ```5 minute``` monitoring:
+> Use a foreloop for continious ```5 minute``` monitoring and AI rationale:
 >
 > ```bash
-> while true; do ./ticker.sh -gs SPY GOLD HNST MSFT PFE PLG PYPL RXT WEAT; sleep 300; clear; done
+> while true; do ./ticker.sh -gs -r 5m SPY B HNST MSFT PFE PLG PYPL RXT WEAT; sleep 300; clear; done
 > ``` 
 
 ## License
