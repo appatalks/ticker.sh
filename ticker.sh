@@ -12,7 +12,7 @@ SESSION_DIR="${TMPDIR%/}/ticker.sh-$(whoami)"
 COOKIE_FILE="${SESSION_DIR}/cookies.txt"
 
 # Script version (update as appropriate)
-VERSION="ticker.sh dev-ai"
+VERSION="ticker.sh ai-release-11-2025 github.comappatalks/ticker.sh"
 
 #-----------------------------------------------------
 # Yahoo Finance API configuration

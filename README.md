@@ -99,7 +99,7 @@ Environment and configuration
 
 - Place your OpenAI API key in a `.env` file or export `OPENAI_API_KEY`.
 - Optional environment variables:
-    - `OPENAI_MODEL` (default: `gpt-5-mini`)
+    - `OPENAI_MODEL` (default: `gpt-5-nano`)
     - `OPENAI_MAX_COMPLETION_TOKENS` (default: `650`)
     - `OPENAI_USE_RESPONSES` (set to `1` to use the Responses API - recommended; default `0`)
 
