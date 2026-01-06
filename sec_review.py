@@ -606,17 +606,26 @@ def run_monitor(ticker: str, report_dir: Optional[str] = None, enable_alerts: bo
     filings = get_recent_filings(cik10, limit=40)
 
     # Always review latest filings with AI analysis
-    filings.sort(key=lambda x: x.filed)  # oldest first
+    filings.sort(key=lambda x: x.filed, reverse=True)  # newest first
+    
+    # Limit to MAX_FILINGS_TO_REVIEW
+    filings_to_review = filings[:MAX_FILINGS_TO_REVIEW]
+    
+    if DEBUG_MODE:
+        print(f"\n=== SEC DEBUG: Filing Review ===", file=sys.stderr)
+        print(f"Total filings found: {len(filings)}", file=sys.stderr)
+        print(f"Reviewing latest {len(filings_to_review)} filing(s) (SEC_MAX_FILINGS={MAX_FILINGS_TO_REVIEW})", file=sys.stderr)
+        print(f"=" * 50, file=sys.stderr)
     
     # Create report
     report = Report(
         ticker=ticker.upper(),
         timestamp=datetime.now().isoformat(),
         filings_checked=len(filings),
-        new_filings=len(filings)
+        new_filings=len(filings_to_review)
     )
 
-    for f in filings:
+    for f in filings_to_review:
         alerts, ai_result = analyze_filing(ticker, cik10, f, price_data)
         
         # Add alerts to report
