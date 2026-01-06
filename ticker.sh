@@ -671,8 +671,12 @@ if [ "$SORT_RESULTS" = true ]; then
           [ "$DEBUG_FLAG" -eq 1 ] && sec_cmd+=("--debug")
           [ "$RATIONALE_FLAG" -eq 1 ] && sec_cmd+=("--price-data" "$price_json")
           
-          # Execute command and capture output
-          sec_summary=$("${sec_cmd[@]}" 2>&1 || echo "[SEC: Error]")
+          # Execute: in debug mode show stderr, otherwise suppress it
+          if [ "$DEBUG_FLAG" -eq 1 ]; then
+            sec_summary=$("${sec_cmd[@]}" || echo "[SEC: Error]")
+          else
+            sec_summary=$("${sec_cmd[@]}" 2>/dev/null || echo "[SEC: Error]")
+          fi
           line="$line $sec_summary"
         fi
 
