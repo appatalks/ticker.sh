@@ -332,8 +332,8 @@ Respond ONLY with valid JSON:
             model=SEC_OPENAI_MODEL,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
-            temperature=0.3,
-            max_tokens=500
+            # temperature=0.3,
+            # max_tokens=500
         )
         
         content = response.choices[0].message.content.strip()
