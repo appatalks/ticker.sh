@@ -16,6 +16,7 @@ Requires: OPENAI_API_KEY in ~/.env
 
 from __future__ import annotations
 import os
+import sys
 import re
 import json
 import time
@@ -63,6 +64,8 @@ SEC_OPENAI_MODEL = os.getenv("SEC_OPENAI_MODEL", "gpt-4.1")
 
 # Quiet mode for compact display (set at runtime)
 QUIET_MODE = False
+# Debug mode for verbose logging (set at runtime)
+DEBUG_MODE = False
 
 # Ticker will be set via command line (no default fallback)
 TICKER = os.environ.get("STOCK_TICKER", None)
@@ -301,6 +304,18 @@ Respond ONLY with valid JSON:
         if not QUIET_MODE:
             print(f"  \ud83e\udd16 AI analyzing {filing_form} filed {filing_date}...")
         
+        if DEBUG_MODE:
+            print(f"\n=== SEC DEBUG: AI Analysis Request ===", file=sys.stderr)
+            print(f"Ticker: {ticker}", file=sys.stderr)
+            print(f"Filing: {filing_form} ({filing_date})", file=sys.stderr)
+            print(f"Model: {SEC_OPENAI_MODEL}", file=sys.stderr)
+            print(f"Text sample length: {len(text_sample):,} chars", file=sys.stderr)
+            if price_data:
+                print(f"Price data: ${price_data.get('currentPrice', 0):.2f} ({price_data.get('percentChange', 0):+.2f}%)", file=sys.stderr)
+            print(f"\nPrompt preview (first 500 chars):", file=sys.stderr)
+            print(f"{prompt[:500]}...", file=sys.stderr)
+            print(f"=" * 50, file=sys.stderr)
+        
         response = openai_client.chat.completions.create(
             model=SEC_OPENAI_MODEL,
             messages=[{"role": "user", "content": prompt}],
@@ -311,6 +326,12 @@ Respond ONLY with valid JSON:
         
         content = response.choices[0].message.content.strip()
         result = json.loads(content)
+        
+        if DEBUG_MODE:
+            print(f"\n=== SEC DEBUG: AI Response ===", file=sys.stderr)
+            print(json.dumps(result, indent=2), file=sys.stderr)
+            print(f"=" * 50 + "\n", file=sys.stderr)
+        
         return result
     
     except Exception as e:
@@ -328,10 +349,19 @@ def analyze_filing(ticker: str, cik10: str, filing: Filing, price_data: Optional
     Analyze a filing using AI only (no pattern matching).
     Returns (list_of_alerts, ai_analysis_dict).
     """
+    if DEBUG_MODE:
+        print(f"\n=== SEC DEBUG: Starting Analysis ===", file=sys.stderr)
+        print(f"Ticker: {ticker}", file=sys.stderr)
+        print(f"Filing: {filing.form} ({filing.filed})", file=sys.stderr)
+        print(f"Accession: {filing.accession}", file=sys.stderr)
+    
     alerts: List[FilingAlert] = []
     urls = guess_text_doc_urls_from_index(cik10, filing.accession)
     # Limit downloads to a handful
     urls = urls[:5]
+    
+    if DEBUG_MODE:
+        print(f"Found {len(urls)} document URLs", file=sys.stderr)
 
     combined_text = ""
     for u in urls:
@@ -342,6 +372,10 @@ def analyze_filing(ticker: str, cik10: str, filing: Filing, price_data: Optional
         txt = normalize_text(raw)
         if len(txt) > 2000:
             combined_text += " " + txt[:100000]  # cap per doc for speed
+    
+    if DEBUG_MODE:
+        print(f"Combined text length: {len(combined_text):,} chars", file=sys.stderr)
+        print(f"=" * 50, file=sys.stderr)
 
     if not combined_text:
         return alerts, {"signal": "NEUTRAL", "confidence": 1, "reasoning": "Could not fetch filing text", "key_points": []}
@@ -620,7 +654,7 @@ def run_monitor(ticker: str, report_dir: Optional[str] = None, enable_alerts: bo
     return report
 
 def main() -> None:
-    global QUIET_MODE
+    global QUIET_MODE, DEBUG_MODE
     
     parser = argparse.ArgumentParser(
         description="Monitor SEC EDGAR filings for stock triggers and generate buy signal reports."
@@ -630,12 +664,15 @@ def main() -> None:
     parser.add_argument("--no-alert", action="store_true", help="Disable real-time alerts, only generate report")
     parser.add_argument("--no-report", action="store_true", help="Disable report saving")
     parser.add_argument("--compact", action="store_true", help="Print compact single-line summary for ticker display")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("--price-data", type=str, help="JSON string with price data for combined analysis")
     
     args = parser.parse_args()
     
     # Enable quiet mode when compact mode is used
     QUIET_MODE = args.compact
+    # Enable debug mode when --debug flag is used
+    DEBUG_MODE = args.debug
     
     ticker = args.ticker
     if not ticker:

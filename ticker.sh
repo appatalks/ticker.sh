@@ -665,13 +665,14 @@ if [ "$SORT_RESULTS" = true ]; then
         sec_summary=""
         if [ -n "$SEC_HELPER" ]; then
           price_json=$(printf '{"currentPrice":%.2f,"priceChange":%.2f,"percentChange":%.2f}' "$currentPrice" "$priceChange" "$percentChange")
-          sec_summary=$(
-            if [ "$RATIONALE_FLAG" -eq 1 ]; then
-              "$SEC_HELPER" "$symbol" --compact --no-alert --price-data "$price_json" 2>/dev/null || echo "[SEC: Error]"
-            else
-              "$SEC_HELPER" "$symbol" --compact --no-alert 2>/dev/null || echo "[SEC: Error]"
-            fi
-          )
+          
+          # Build SEC helper command with optional debug flag
+          sec_cmd=("$SEC_HELPER" "$symbol" "--compact" "--no-alert")
+          [ "$DEBUG_FLAG" -eq 1 ] && sec_cmd+=("--debug")
+          [ "$RATIONALE_FLAG" -eq 1 ] && sec_cmd+=("--price-data" "$price_json")
+          
+          # Execute command and capture output
+          sec_summary=$("${sec_cmd[@]}" 2>&1 || echo "[SEC: Error]")
           line="$line $sec_summary"
         fi
 
@@ -841,18 +842,17 @@ else
         sec_summary=""
         if [ -n "$SEC_HELPER" ]; then
           price_json=$(printf '{"currentPrice":%.2f,"priceChange":%.2f,"percentChange":%.2f}' "$currentPrice" "$priceChange" "$percentChange")
+          
+          # Build SEC command with optional flags
+          sec_cmd=("$SEC_HELPER" "$symbol" "--compact" "--no-alert")
+          [ "$DEBUG_FLAG" -eq 1 ] && sec_cmd+=("--debug")
+          [ "$RATIONALE_FLAG" -eq 1 ] && sec_cmd+=("--price-data" "$price_json")
+          
+          # Execute: in debug mode show stderr, otherwise suppress it
           if [ "$DEBUG_FLAG" -eq 1 ]; then
-            # Debug mode: show full output, no compact mode
-            "$SEC_HELPER" "$symbol" --no-alert 2>&1
-            sec_summary="[SEC: See above]"
+            sec_summary=$("${sec_cmd[@]}" || echo "[SEC: Error]")
           else
-            sec_summary=$(
-              if [ "$RATIONALE_FLAG" -eq 1 ]; then
-                "$SEC_HELPER" "$symbol" --compact --no-alert --price-data "$price_json" 2>/dev/null || echo "[SEC: Error]"
-              else
-                "$SEC_HELPER" "$symbol" --compact --no-alert 2>/dev/null || echo "[SEC: Error]"
-              fi
-            )
+            sec_summary=$("${sec_cmd[@]}" 2>/dev/null || echo "[SEC: Error]")
           fi
           line="$line $sec_summary"
         fi
