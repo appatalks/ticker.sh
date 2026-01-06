@@ -312,8 +312,20 @@ Respond ONLY with valid JSON:
             print(f"Text sample length: {len(text_sample):,} chars", file=sys.stderr)
             if price_data:
                 print(f"Price data: ${price_data.get('currentPrice', 0):.2f} ({price_data.get('percentChange', 0):+.2f}%)", file=sys.stderr)
-            print(f"\n--- Full Prompt/Payload ---", file=sys.stderr)
-            print(f"{prompt}", file=sys.stderr)
+            
+            # Show prompt structure without filing content
+            print(f"\n--- Payload Structure (filing content omitted) ---", file=sys.stderr)
+            # Find where filing content starts in the prompt
+            filing_marker = "Filing Content:"
+            if filing_marker in prompt:
+                prompt_header = prompt.split(filing_marker)[0] + filing_marker
+                print(f"{prompt_header}", file=sys.stderr)
+                print(f"[... {len(text_sample):,} chars of filing text omitted ...]", file=sys.stderr)
+                print(f"\nRespond ONLY with valid JSON:", file=sys.stderr)
+                print(f'{{\n  "signal": "BUY" or "SELL" or "HOLD",\n  "confidence": integer 1-10,\n  "reasoning": "concise explanation",\n  "key_points": ["point 1", "point 2", "point 3"]\n}}', file=sys.stderr)
+            else:
+                # Fallback if structure changes
+                print(f"{prompt[:1000]}...\n[... {len(prompt)-1000} chars omitted ...]", file=sys.stderr)
             print(f"=" * 50, file=sys.stderr)
         
         response = openai_client.chat.completions.create(
