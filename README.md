@@ -95,13 +95,31 @@ Examples:
         # Include rationale and debug info
         ./ticker.sh -a 5m -r -d RXT
 
+### SEC Filing Review (Optional - with sec_review.py)
+
+The `-f` or `--filings` flag enables AI-powered analysis of recent SEC filings (8-K, 10-Q, 10-K) to detect material events and provide buy/sell/hold recommendations.
+
+- Use `-f` to show SEC filing analysis inline with stock prices.
+- Combine `-f` and `-r` to display both SEC reasoning and price-based AI rationale.
+
+Examples:
+
+        # Show SEC filing analysis
+        ./ticker.sh -f MSFT
+
+        # Show both SEC and price rationale
+        ./ticker.sh -f -r MSFT
+
 Environment and configuration
 
 - Place your OpenAI API key in a `.env` file or export `OPENAI_API_KEY`.
 - Optional environment variables:
-    - `OPENAI_MODEL` (default: `gpt-5-nano`)
+    - `OPENAI_MODEL` (model for price-based AI alerts, default: `gpt-5-nano`)
+    - `SEC_OPENAI_MODEL` (model for SEC filing analysis, default: `gpt-4.1`)
     - `OPENAI_MAX_COMPLETION_TOKENS` (default: `650`)
     - `OPENAI_USE_RESPONSES` (set to `1` to use the Responses API - recommended; default `0`)
+    - `SEC_ONLY_FORMS` (comma-separated list of filing types to monitor, default: `8-K,10-Q,10-K`)
+    - `SEC_MAX_FILINGS` (maximum number of recent filings to review, default: `3`)
 
 Notes
 

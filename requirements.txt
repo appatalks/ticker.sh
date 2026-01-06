@@ -1,0 +1,3 @@
+# Python dependencies for ticker.sh AI features
+openai>=1.0.0
+python-dotenv>=1.0.0

@@ -39,6 +39,7 @@ DISPLAY_METALS=false
 SORT_RESULTS=false
 ALERT_TIMEFRAME=""
 RATIONALE_FLAG=0
+SEC_FILINGS_FLAG=0
 
 # Preprocess long GNU-style options (e.g. --help, --debug, --alert) into short
 # options so we can rely on getopts. This handles --opt and --opt VALUE forms.
@@ -74,6 +75,10 @@ if [ "$#" -gt 0 ]; then
         ;;
       --rationale)
         _args+=( -r )
+        shift
+        ;;
+      --filings)
+        _args+=( -f )
         shift
         ;;
       --cleanup)
@@ -135,6 +140,9 @@ Options:
                           returns a compact recommendation.
   -r, --rationale         Include a short rationale with AI recommendations.
                           If used without -a, this implies -a 1d (default).
+  -f, --filings           Review SEC filings for each symbol using ai_alert.py
+                          style analysis. Creates reports in system tmp and
+                          maintains state in ~/.cache/ticker.sh/sec_filings.
   -d, --debug             Print debug output from the AI helper (raw model
                           response and payload preview).
   -C, --cleanup           Remove session cookies and run artifacts after the run
@@ -172,6 +180,9 @@ Examples:
 
   # Include a short rationale and show debug info from the helper
   ./ticker.sh -a 5m -r -d AAPL
+
+  # Review SEC filings for symbols
+  ./ticker.sh -f AAPL MSFT
 
 Note about cleanup:
   By default the script removes per-run AI temp files after the run. Use
@@ -267,10 +278,13 @@ show_version() {
   exit 0
 }
 
-while getopts "gsa:rdCnt:-hv" opt; do
+while getopts "gsa:rdCnt:f-hv" opt; do
   case ${opt} in
     g)
       DISPLAY_METALS=true
+      ;;
+    f)
+      SEC_FILINGS_FLAG=1
       ;;
     C)
       CLEANUP_FLAG=1
@@ -346,6 +360,9 @@ while getopts "gsa:rdCnt:-hv" opt; do
         debug)
           DEBUG_FLAG=1
           ;;
+        filings)
+          SEC_FILINGS_FLAG=1
+          ;;
         *)
           echo "Unknown option --$OPTARG"
           exit 1
@@ -420,7 +437,7 @@ if [ -n "$ALERT_TIMEFRAME" ]; then
   fi
 fi
 
-if [ ${#SYMBOLS[@]} -eq 0 ] && [ "$DISPLAY_METALS" = false ]; then
+if [ ${#SYMBOLS[@]} -eq 0 ] && [ "$DISPLAY_METALS" = false ] && [ "$SEC_FILINGS_FLAG" -eq 0 ]; then
   echo "Usage: $0 [-gsd] SYMBOL1 SYMBOL2 ..."
   exit 1
 fi
@@ -587,6 +604,29 @@ if [ "$DISPLAY_METALS" = true ]; then
 fi
 
 #-----------------------------------------------------
+# Prepare SEC helper if -f flag is provided
+#-----------------------------------------------------
+SEC_HELPER=""
+if [ "$SEC_FILINGS_FLAG" -eq 1 ]; then
+  SEC_HELPER="$(dirname "$0")/sec_review.py"
+  if [ -f "$SEC_HELPER" ]; then
+    [ ! -x "$SEC_HELPER" ] && chmod +x "$SEC_HELPER"
+  else
+    cat >&2 <<'MSG'
+The -f/--filings option requires the helper script 'sec_review.py'
+to be present next to this script and executable.
+MSG
+    exit 1
+  fi
+  
+  # Check if symbols provided
+  if [ ${#SYMBOLS[@]} -eq 0 ]; then
+    echo "Error: -f/--filings requires at least one symbol" >&2
+    exit 1
+  fi
+fi
+
+#-----------------------------------------------------
 # Main Processing: Retrieve stock data in parallel.
 # We handle two cases:
 # 1. Sorted by gain/loss percentage (-s)
@@ -621,6 +661,20 @@ if [ "$SORT_RESULTS" = true ]; then
             "$symbol" "$currentPrice" "$priceChange" "$percentChange")
         fi
 
+        # Add SEC filing summary if -f flag enabled
+        sec_summary=""
+        if [ -n "$SEC_HELPER" ]; then
+          price_json=$(printf '{"currentPrice":%.2f,"priceChange":%.2f,"percentChange":%.2f}' "$currentPrice" "$priceChange" "$percentChange")
+          sec_summary=$(
+            if [ "$RATIONALE_FLAG" -eq 1 ]; then
+              "$SEC_HELPER" "$symbol" --compact --no-alert --price-data "$price_json" 2>/dev/null || echo "[SEC: Error]"
+            else
+              "$SEC_HELPER" "$symbol" --compact --no-alert 2>/dev/null || echo "[SEC: Error]"
+            fi
+          )
+          line="$line $sec_summary"
+        fi
+
         # Write percent, symbol, and formatted line to the in-memory array
         printf "%.2f\t%s\t%s\n" "$percentChange" "$symbol" "$line"
       ) &
@@ -639,9 +693,20 @@ if [ "$SORT_RESULTS" = true ]; then
     ai_index=0
     unset ai_files
     unset ai_lines
+    unset sec_rationales  # Store SEC reasoning if available
     for entry in "${ORDERED_OUTPUTS[@]}"; do
       IFS=$'\t' read -r percent symbol line <<< "$entry"
       ai_lines[$ai_index]="$line"
+      
+      # Extract SEC reasoning if present (format: "...stuff [SEC: SIGNAL]|SEC: reasoning")
+      if echo "$line" | grep -q '|SEC: '; then
+        sec_rat=$(echo "$line" | sed -n 's/.*|SEC: \(.*\)/\1/p')
+        sec_rationales[$ai_index]="$sec_rat"
+        # Remove the reasoning part from the display line (keep just the signal)
+        line=$(echo "$line" | sed 's/|SEC: .*//')
+        ai_lines[$ai_index]="$line"
+      fi
+      
   out_file="$TMP_AI_DIR/out_$ai_index"
       # Launch helper in background and capture full output to a file
       (
@@ -715,8 +780,19 @@ if [ "$SORT_RESULTS" = true ]; then
         esac
       fi
       line_to_print="${ai_lines[$idx]}"
+      
+      # Add SEC reasoning if available (when RATIONALE_FLAG is set)
+      combined_rationale="$rationale_part"
+      if [ "$RATIONALE_FLAG" -eq 1 ] && [ -n "${sec_rationales[$idx]}" ]; then
+        if [ -n "$combined_rationale" ]; then
+          combined_rationale="${sec_rationales[$idx]}; $combined_rationale"
+        else
+          combined_rationale="${sec_rationales[$idx]}"
+        fi
+      fi
+      
       # Use helper to print the line and format rationale block
-      print_with_rationale "$line_to_print" "$REC_PRINT" "$status_part" "$rationale_part"
+      print_with_rationale "$line_to_print" "$REC_PRINT" "$status_part" "$combined_rationale"
       # Add an extra blank line between symbols when rationale display is enabled
       if [ "$RATIONALE_FLAG" -eq 1 ]; then
         printf "\n"
@@ -759,6 +835,26 @@ else
         else
           line=$(printf "%-10s%8.2f%10.2f%9.2f%%" \
             "$symbol" "$currentPrice" "$priceChange" "$percentChange")
+        fi
+
+        # Add SEC filing summary if -f flag enabled
+        sec_summary=""
+        if [ -n "$SEC_HELPER" ]; then
+          price_json=$(printf '{"currentPrice":%.2f,"priceChange":%.2f,"percentChange":%.2f}' "$currentPrice" "$priceChange" "$percentChange")
+          if [ "$DEBUG_FLAG" -eq 1 ]; then
+            # Debug mode: show full output, no compact mode
+            "$SEC_HELPER" "$symbol" --no-alert 2>&1
+            sec_summary="[SEC: See above]"
+          else
+            sec_summary=$(
+              if [ "$RATIONALE_FLAG" -eq 1 ]; then
+                "$SEC_HELPER" "$symbol" --compact --no-alert --price-data "$price_json" 2>/dev/null || echo "[SEC: Error]"
+              else
+                "$SEC_HELPER" "$symbol" --compact --no-alert 2>/dev/null || echo "[SEC: Error]"
+              fi
+            )
+          fi
+          line="$line $sec_summary"
         fi
 
         # Write index, symbol, and formatted line to the in-memory array
