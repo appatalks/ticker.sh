@@ -77,6 +77,10 @@ if [ "$#" -gt 0 ]; then
         _args+=( -r )
         shift
         ;;
+      --compact)
+        _args+=( -c )
+        shift
+        ;;
       --filings)
         _args+=( -f )
         shift
@@ -140,9 +144,10 @@ Options:
                           returns a compact recommendation.
   -r, --rationale         Include a short rationale with AI recommendations.
                           If used without -a, this implies -a 1d (default).
-  -f, --filings           Review SEC filings for each symbol using ai_alert.py
-                          style analysis. Creates reports in system tmp and
-                          maintains state in ~/.cache/ticker.sh/sec_filings.
+  -c, --compact           Show signals only (BUY/SELL/HOLD) without detailed
+                          reasoning. Works with -r and -f flags.
+  -f, --filings           Review SEC filings for each symbol using AI analysis.
+                          Creates reports in system tmp.
   -d, --debug             Print debug output from the AI helper (raw model
                           response and payload preview).
   -C, --cleanup           Remove session cookies and run artifacts after the run
@@ -208,8 +213,8 @@ print_with_rationale() {
     main=$(printf "%s [%s]" "$line" "$rec")
   fi
 
-  # If no rationale, just print the main line
-  if [ -z "$rationale" ]; then
+  # If no rationale or compact mode, just print the main line
+  if [ -z "$rationale" ] || [ "$COMPACT_MODE" -eq 1 ]; then
     printf "%s\n" "$main"
     return
   fi
@@ -221,7 +226,7 @@ print_with_rationale() {
   # Terminal width and column sizing
   local cols
   cols=$(tput cols 2>/dev/null || echo 80)
-  local left_w=56
+  local left_w=70
   if [ "$cols" -lt 90 ]; then
     left_w=48
   fi
@@ -236,10 +241,11 @@ print_with_rationale() {
   esc=$(printf '\033')
   stripped_len=$(printf "%s" "$main" | sed -E "s/${esc}\[[0-9;]*m//g" | wc -c | awk '{print $1}')
 
-  # If the main text is longer than the left column, fall back to previous block style
+  # If the main text is longer than the left column, fall back to block style
   if [ "$stripped_len" -gt "$left_w" ]; then
     printf "%s\n" "$main"
-    printf "%s\n" "    $(printf "%s" "$cleaned" | fold -s -w $((cols - 6)) | sed 's/^/    /')"
+    printf "%s" "$cleaned" | fold -s -w $((cols - 4)) | sed 's/^/    /g'
+    printf "\n"
     return
   fi
 
@@ -278,7 +284,7 @@ show_version() {
   exit 0
 }
 
-while getopts "gsa:rdCnt:f-hv" opt; do
+while getopts "gsa:rdcCnt:f-hv" opt; do
   case ${opt} in
     g)
       DISPLAY_METALS=true
@@ -308,6 +314,9 @@ while getopts "gsa:rdCnt:f-hv" opt; do
       ;;
     d)
       DEBUG_FLAG=1
+      ;;
+    c)
+      COMPACT_MODE=1
       ;;
     n)
       # keep run artifacts
@@ -381,6 +390,7 @@ shift $((OPTIND -1))
 SYMBOLS+=("$@")
 DEBUG_FLAG=${DEBUG_FLAG:-0}
 RATIONALE_FLAG=${RATIONALE_FLAG:-0}
+COMPACT_MODE=${COMPACT_MODE:-0}
 
 # If rationale requested but no timeframe provided, default to 1d
 if [ "$RATIONALE_FLAG" -eq 1 ] && [ -z "$ALERT_TIMEFRAME" ]; then
@@ -677,6 +687,12 @@ if [ "$SORT_RESULTS" = true ]; then
           else
             sec_summary=$("${sec_cmd[@]}" 2>/dev/null || echo "[SEC: Error]")
           fi
+          
+          # In compact mode, strip the reasoning part (everything after |SEC:)
+          if [ "$COMPACT_MODE" -eq 1 ] && echo "$sec_summary" | grep -q '|SEC: '; then
+            sec_summary=$(echo "$sec_summary" | sed 's/|SEC: .*//')
+          fi
+          
           line="$line $sec_summary"
         fi
 
@@ -798,8 +814,8 @@ if [ "$SORT_RESULTS" = true ]; then
       
       # Use helper to print the line and format rationale block
       print_with_rationale "$line_to_print" "$REC_PRINT" "$status_part" "$combined_rationale"
-      # Add an extra blank line between symbols when rationale display is enabled
-      if [ "$RATIONALE_FLAG" -eq 1 ]; then
+      # Add an extra blank line between symbols when rationale display is enabled (but not in compact mode)
+      if [ "$RATIONALE_FLAG" -eq 1 ] && [ "$COMPACT_MODE" -eq 0 ]; then
         printf "\n"
       fi
       sleep "$ALERT_DELAY"
@@ -807,7 +823,27 @@ if [ "$SORT_RESULTS" = true ]; then
   else
     for entry in "${ORDERED_OUTPUTS[@]}"; do
       IFS=$'\t' read -r percent symbol line <<< "$entry"
-      printf "%s\n" "$line"
+      
+      # Extract SEC signal and reasoning if present for proper formatting
+      sec_signal=""
+      sec_reasoning=""
+      if echo "$line" | grep -q '|SEC: '; then
+        # Extract just the signal part [SEC: HOLD] and strip brackets
+        sec_signal=$(echo "$line" | sed -n 's/.*\[SEC: \([^]]*\)\].*/\1/p')
+        # Prepend "SEC: " to the signal for display
+        sec_signal="SEC: $sec_signal"
+        # Extract the reasoning after |SEC:
+        sec_reasoning=$(echo "$line" | sed -n 's/.*|SEC: \(.*\)/\1/p')
+        # Remove both the signal and reasoning from the line
+        line=$(echo "$line" | sed 's/ \[SEC: [^]]*\]|SEC: .*//')
+      fi
+      
+      # If we have SEC data, format it nicely; otherwise just print the line
+      if [ -n "$sec_signal" ]; then
+        print_with_rationale "$line" "$sec_signal" "" "$sec_reasoning"
+      else
+        printf "%s\n" "$line"
+      fi
     done
   fi
 else
@@ -858,6 +894,12 @@ else
           else
             sec_summary=$("${sec_cmd[@]}" 2>/dev/null || echo "[SEC: Error]")
           fi
+          
+          # In compact mode, strip the reasoning part (everything after |SEC:)
+          if [ "$COMPACT_MODE" -eq 1 ] && echo "$sec_summary" | grep -q '|SEC: '; then
+            sec_summary=$(echo "$sec_summary" | sed 's/|SEC: .*//')
+          fi
+          
           line="$line $sec_summary"
         fi
 
@@ -878,9 +920,20 @@ else
     ai_index=0
     unset ai_files
     unset ai_lines
+    unset sec_rationales  # Store SEC reasoning if available
     for entry in "${ORDERED_OUTPUTS[@]}"; do
       IFS=$'\t' read -r idx symbol line <<< "$entry"
       ai_lines[$ai_index]="$line"
+      
+      # Extract SEC reasoning if present (format: "...stuff [SEC: SIGNAL]|SEC: reasoning")
+      if echo "$line" | grep -q '|SEC: '; then
+        sec_rat=$(echo "$line" | sed -n 's/.*|SEC: \(.*\)/\1/p')
+        sec_rationales[$ai_index]="$sec_rat"
+        # Remove the reasoning part from the display line (keep just the signal)
+        line=$(echo "$line" | sed 's/|SEC: .*//')
+        ai_lines[$ai_index]="$line"
+      fi
+      
       out_file="$TMP_AI_DIR/out_$ai_index"
       (
         if [ "$DEBUG_FLAG" -eq 1 ]; then
@@ -950,8 +1003,20 @@ else
         esac
       fi
       line_to_print="${ai_lines[$idx]}"
-      print_with_rationale "$line_to_print" "$REC_PRINT" "$status_part" "$rationale_part"
-      if [ "$RATIONALE_FLAG" -eq 1 ]; then
+      
+      # Add SEC reasoning if available (when RATIONALE_FLAG is set)
+      combined_rationale="$rationale_part"
+      if [ "$RATIONALE_FLAG" -eq 1 ] && [ -n "${sec_rationales[$idx]}" ]; then
+        if [ -n "$combined_rationale" ]; then
+          combined_rationale="${sec_rationales[$idx]}; $combined_rationale"
+        else
+          combined_rationale="${sec_rationales[$idx]}"
+        fi
+      fi
+      
+      print_with_rationale "$line_to_print" "$REC_PRINT" "$status_part" "$combined_rationale"
+      # Add an extra blank line between symbols when rationale display is enabled (but not in compact mode)
+      if [ "$RATIONALE_FLAG" -eq 1 ] && [ "$COMPACT_MODE" -eq 0 ]; then
         printf "\n"
       fi
       sleep "$ALERT_DELAY"
@@ -959,7 +1024,27 @@ else
   else
     for entry in "${ORDERED_OUTPUTS[@]}"; do
       IFS=$'\t' read -r idx symbol line <<< "$entry"
-      printf "%s\n" "$line"
+      
+      # Extract SEC signal and reasoning if present for proper formatting
+      sec_signal=""
+      sec_reasoning=""
+      if echo "$line" | grep -q '|SEC: '; then
+        # Extract just the signal part [SEC: HOLD] and strip brackets
+        sec_signal=$(echo "$line" | sed -n 's/.*\[SEC: \([^]]*\)\].*/\1/p')
+        # Prepend "SEC: " to the signal for display
+        sec_signal="SEC: $sec_signal"
+        # Extract the reasoning after |SEC:
+        sec_reasoning=$(echo "$line" | sed -n 's/.*|SEC: \(.*\)/\1/p')
+        # Remove both the signal and reasoning from the line
+        line=$(echo "$line" | sed 's/ \[SEC: [^]]*\]|SEC: .*//')
+      fi
+      
+      # If we have SEC data, format it nicely; otherwise just print the line
+      if [ -n "$sec_signal" ]; then
+        print_with_rationale "$line" "$sec_signal" "" "$sec_reasoning"
+      else
+        printf "%s\n" "$line"
+      fi
     done
   fi
 fi
