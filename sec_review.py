@@ -312,8 +312,8 @@ Respond ONLY with valid JSON:
             print(f"Text sample length: {len(text_sample):,} chars", file=sys.stderr)
             if price_data:
                 print(f"Price data: ${price_data.get('currentPrice', 0):.2f} ({price_data.get('percentChange', 0):+.2f}%)", file=sys.stderr)
-            print(f"\nPrompt preview (first 500 chars):", file=sys.stderr)
-            print(f"{prompt[:500]}...", file=sys.stderr)
+            print(f"\n--- Full Prompt/Payload ---", file=sys.stderr)
+            print(f"{prompt}", file=sys.stderr)
             print(f"=" * 50, file=sys.stderr)
         
         response = openai_client.chat.completions.create(
@@ -328,6 +328,9 @@ Respond ONLY with valid JSON:
         result = json.loads(content)
         
         if DEBUG_MODE:
+            print(f"\n=== SEC DEBUG: AI Response ===", file=sys.stderr)
+            print(json.dumps(result, indent=2), file=sys.stderr)
+            print(f"=" * 50 + "\n", file=sys.stderr)
             print(f"\n=== SEC DEBUG: AI Response ===", file=sys.stderr)
             print(json.dumps(result, indent=2), file=sys.stderr)
             print(f"=" * 50 + "\n", file=sys.stderr)
