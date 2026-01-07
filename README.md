@@ -142,6 +142,8 @@ Examples:
         # Show signals only without detailed reasoning
         ./ticker.sh -f -c MSFT
 
+ ![ticker-ai](https://raw.githubusercontent.com/appatalks/ticker.sh/main/ticker-ai.png)       
+
 Environment and configuration
 
 - Place your OpenAI API key in a `.env` file or export `OPENAI_API_KEY`.
