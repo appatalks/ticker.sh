@@ -12,7 +12,7 @@ SESSION_DIR="${TMPDIR%/}/ticker.sh-$(whoami)"
 COOKIE_FILE="${SESSION_DIR}/cookies.txt"
 
 # Script version (update as appropriate)
-VERSION="ticker.sh ai-release-11-2025 github.com/appatalks/ticker.sh"
+VERSION="ticker.sh ai-release-01-2026 github.com/appatalks/ticker.sh"
 
 #-----------------------------------------------------
 # Yahoo Finance API configuration
@@ -39,6 +39,7 @@ DISPLAY_METALS=false
 SORT_RESULTS=false
 ALERT_TIMEFRAME=""
 RATIONALE_FLAG=0
+SEC_FILINGS_FLAG=0
 
 # Preprocess long GNU-style options (e.g. --help, --debug, --alert) into short
 # options so we can rely on getopts. This handles --opt and --opt VALUE forms.
@@ -74,6 +75,14 @@ if [ "$#" -gt 0 ]; then
         ;;
       --rationale)
         _args+=( -r )
+        shift
+        ;;
+      --compact)
+        _args+=( -c )
+        shift
+        ;;
+      --filings)
+        _args+=( -f )
         shift
         ;;
       --cleanup)
@@ -135,6 +144,10 @@ Options:
                           returns a compact recommendation.
   -r, --rationale         Include a short rationale with AI recommendations.
                           If used without -a, this implies -a 1d (default).
+  -c, --compact           Show signals only (BUY/SELL/HOLD) without detailed
+                          reasoning. Works with -r and -f flags.
+  -f, --filings           Review SEC filings for each symbol using AI analysis.
+                          Creates reports in system tmp.
   -d, --debug             Print debug output from the AI helper (raw model
                           response and payload preview).
   -C, --cleanup           Remove session cookies and run artifacts after the run
@@ -173,6 +186,9 @@ Examples:
   # Include a short rationale and show debug info from the helper
   ./ticker.sh -a 5m -r -d AAPL
 
+  # Review SEC filings for symbols
+  ./ticker.sh -f AAPL MSFT
+
 Note about cleanup:
   By default the script removes per-run AI temp files after the run. Use
   `-C/--cleanup` to also remove the saved cookie file used for Yahoo requests.
@@ -197,8 +213,8 @@ print_with_rationale() {
     main=$(printf "%s [%s]" "$line" "$rec")
   fi
 
-  # If no rationale, just print the main line
-  if [ -z "$rationale" ]; then
+  # If no rationale or compact mode, just print the main line
+  if [ -z "$rationale" ] || [ "$COMPACT_MODE" -eq 1 ]; then
     printf "%s\n" "$main"
     return
   fi
@@ -210,7 +226,7 @@ print_with_rationale() {
   # Terminal width and column sizing
   local cols
   cols=$(tput cols 2>/dev/null || echo 80)
-  local left_w=56
+  local left_w=70
   if [ "$cols" -lt 90 ]; then
     left_w=48
   fi
@@ -225,10 +241,11 @@ print_with_rationale() {
   esc=$(printf '\033')
   stripped_len=$(printf "%s" "$main" | sed -E "s/${esc}\[[0-9;]*m//g" | wc -c | awk '{print $1}')
 
-  # If the main text is longer than the left column, fall back to previous block style
+  # If the main text is longer than the left column, fall back to block style
   if [ "$stripped_len" -gt "$left_w" ]; then
     printf "%s\n" "$main"
-    printf "%s\n" "    $(printf "%s" "$cleaned" | fold -s -w $((cols - 6)) | sed 's/^/    /')"
+    printf "%s" "$cleaned" | fold -s -w $((cols - 4)) | sed 's/^/    /g'
+    printf "\n"
     return
   fi
 
@@ -267,10 +284,13 @@ show_version() {
   exit 0
 }
 
-while getopts "gsa:rdCnt:-hv" opt; do
+while getopts "gsa:rdcCnt:f-hv" opt; do
   case ${opt} in
     g)
       DISPLAY_METALS=true
+      ;;
+    f)
+      SEC_FILINGS_FLAG=1
       ;;
     C)
       CLEANUP_FLAG=1
@@ -294,6 +314,9 @@ while getopts "gsa:rdCnt:-hv" opt; do
       ;;
     d)
       DEBUG_FLAG=1
+      ;;
+    c)
+      COMPACT_MODE=1
       ;;
     n)
       # keep run artifacts
@@ -346,6 +369,9 @@ while getopts "gsa:rdCnt:-hv" opt; do
         debug)
           DEBUG_FLAG=1
           ;;
+        filings)
+          SEC_FILINGS_FLAG=1
+          ;;
         *)
           echo "Unknown option --$OPTARG"
           exit 1
@@ -364,6 +390,7 @@ shift $((OPTIND -1))
 SYMBOLS+=("$@")
 DEBUG_FLAG=${DEBUG_FLAG:-0}
 RATIONALE_FLAG=${RATIONALE_FLAG:-0}
+COMPACT_MODE=${COMPACT_MODE:-0}
 
 # If rationale requested but no timeframe provided, default to 1d
 if [ "$RATIONALE_FLAG" -eq 1 ] && [ -z "$ALERT_TIMEFRAME" ]; then
@@ -420,7 +447,7 @@ if [ -n "$ALERT_TIMEFRAME" ]; then
   fi
 fi
 
-if [ ${#SYMBOLS[@]} -eq 0 ] && [ "$DISPLAY_METALS" = false ]; then
+if [ ${#SYMBOLS[@]} -eq 0 ] && [ "$DISPLAY_METALS" = false ] && [ "$SEC_FILINGS_FLAG" -eq 0 ]; then
   echo "Usage: $0 [-gsd] SYMBOL1 SYMBOL2 ..."
   exit 1
 fi
@@ -587,6 +614,29 @@ if [ "$DISPLAY_METALS" = true ]; then
 fi
 
 #-----------------------------------------------------
+# Prepare SEC helper if -f flag is provided
+#-----------------------------------------------------
+SEC_HELPER=""
+if [ "$SEC_FILINGS_FLAG" -eq 1 ]; then
+  SEC_HELPER="$(dirname "$0")/sec_review.py"
+  if [ -f "$SEC_HELPER" ]; then
+    [ ! -x "$SEC_HELPER" ] && chmod +x "$SEC_HELPER"
+  else
+    cat >&2 <<'MSG'
+The -f/--filings option requires the helper script 'sec_review.py'
+to be present next to this script and executable.
+MSG
+    exit 1
+  fi
+  
+  # Check if symbols provided
+  if [ ${#SYMBOLS[@]} -eq 0 ]; then
+    echo "Error: -f/--filings requires at least one symbol" >&2
+    exit 1
+  fi
+fi
+
+#-----------------------------------------------------
 # Main Processing: Retrieve stock data in parallel.
 # We handle two cases:
 # 1. Sorted by gain/loss percentage (-s)
@@ -621,6 +671,31 @@ if [ "$SORT_RESULTS" = true ]; then
             "$symbol" "$currentPrice" "$priceChange" "$percentChange")
         fi
 
+        # Add SEC filing summary if -f flag enabled
+        sec_summary=""
+        if [ -n "$SEC_HELPER" ]; then
+          price_json=$(printf '{"currentPrice":%.2f,"priceChange":%.2f,"percentChange":%.2f}' "$currentPrice" "$priceChange" "$percentChange")
+          
+          # Build SEC helper command with optional debug flag
+          sec_cmd=("$SEC_HELPER" "$symbol" "--compact" "--no-alert")
+          [ "$DEBUG_FLAG" -eq 1 ] && sec_cmd+=("--debug")
+          [ "$RATIONALE_FLAG" -eq 1 ] && sec_cmd+=("--price-data" "$price_json")
+          
+          # Execute: in debug mode show stderr, otherwise suppress it
+          if [ "$DEBUG_FLAG" -eq 1 ]; then
+            sec_summary=$("${sec_cmd[@]}" || echo "[SEC: Error]")
+          else
+            sec_summary=$("${sec_cmd[@]}" 2>/dev/null || echo "[SEC: Error]")
+          fi
+          
+          # In compact mode, strip the reasoning part (everything after |SEC:)
+          if [ "$COMPACT_MODE" -eq 1 ] && echo "$sec_summary" | grep -q '|SEC: '; then
+            sec_summary=$(echo "$sec_summary" | sed 's/|SEC: .*//')
+          fi
+          
+          line="$line $sec_summary"
+        fi
+
         # Write percent, symbol, and formatted line to the in-memory array
         printf "%.2f\t%s\t%s\n" "$percentChange" "$symbol" "$line"
       ) &
@@ -639,9 +714,20 @@ if [ "$SORT_RESULTS" = true ]; then
     ai_index=0
     unset ai_files
     unset ai_lines
+    unset sec_rationales  # Store SEC reasoning if available
     for entry in "${ORDERED_OUTPUTS[@]}"; do
       IFS=$'\t' read -r percent symbol line <<< "$entry"
       ai_lines[$ai_index]="$line"
+      
+      # Extract SEC reasoning if present (format: "...stuff [SEC: SIGNAL]|SEC: reasoning")
+      if echo "$line" | grep -q '|SEC: '; then
+        sec_rat=$(echo "$line" | sed -n 's/.*|SEC: \(.*\)/\1/p')
+        sec_rationales[$ai_index]="$sec_rat"
+        # Remove the reasoning part from the display line (keep just the signal)
+        line=$(echo "$line" | sed 's/|SEC: .*//')
+        ai_lines[$ai_index]="$line"
+      fi
+      
   out_file="$TMP_AI_DIR/out_$ai_index"
       # Launch helper in background and capture full output to a file
       (
@@ -715,10 +801,21 @@ if [ "$SORT_RESULTS" = true ]; then
         esac
       fi
       line_to_print="${ai_lines[$idx]}"
+      
+      # Add SEC reasoning if available (when RATIONALE_FLAG is set)
+      combined_rationale="$rationale_part"
+      if [ "$RATIONALE_FLAG" -eq 1 ] && [ -n "${sec_rationales[$idx]}" ]; then
+        if [ -n "$combined_rationale" ]; then
+          combined_rationale="${sec_rationales[$idx]}; $combined_rationale"
+        else
+          combined_rationale="${sec_rationales[$idx]}"
+        fi
+      fi
+      
       # Use helper to print the line and format rationale block
-      print_with_rationale "$line_to_print" "$REC_PRINT" "$status_part" "$rationale_part"
-      # Add an extra blank line between symbols when rationale display is enabled
-      if [ "$RATIONALE_FLAG" -eq 1 ]; then
+      print_with_rationale "$line_to_print" "$REC_PRINT" "$status_part" "$combined_rationale"
+      # Add an extra blank line between symbols when rationale display is enabled (but not in compact mode)
+      if [ "$RATIONALE_FLAG" -eq 1 ] && [ "$COMPACT_MODE" -eq 0 ]; then
         printf "\n"
       fi
       sleep "$ALERT_DELAY"
@@ -726,7 +823,27 @@ if [ "$SORT_RESULTS" = true ]; then
   else
     for entry in "${ORDERED_OUTPUTS[@]}"; do
       IFS=$'\t' read -r percent symbol line <<< "$entry"
-      printf "%s\n" "$line"
+      
+      # Extract SEC signal and reasoning if present for proper formatting
+      sec_signal=""
+      sec_reasoning=""
+      if echo "$line" | grep -q '|SEC: '; then
+        # Extract just the signal part [SEC: HOLD] and strip brackets
+        sec_signal=$(echo "$line" | sed -n 's/.*\[SEC: \([^]]*\)\].*/\1/p')
+        # Prepend "SEC: " to the signal for display
+        sec_signal="SEC: $sec_signal"
+        # Extract the reasoning after |SEC:
+        sec_reasoning=$(echo "$line" | sed -n 's/.*|SEC: \(.*\)/\1/p')
+        # Remove both the signal and reasoning from the line
+        line=$(echo "$line" | sed 's/ \[SEC: [^]]*\]|SEC: .*//')
+      fi
+      
+      # If we have SEC data, format it nicely; otherwise just print the line
+      if [ -n "$sec_signal" ]; then
+        print_with_rationale "$line" "$sec_signal" "" "$sec_reasoning"
+      else
+        printf "%s\n" "$line"
+      fi
     done
   fi
 else
@@ -761,6 +878,31 @@ else
             "$symbol" "$currentPrice" "$priceChange" "$percentChange")
         fi
 
+        # Add SEC filing summary if -f flag enabled
+        sec_summary=""
+        if [ -n "$SEC_HELPER" ]; then
+          price_json=$(printf '{"currentPrice":%.2f,"priceChange":%.2f,"percentChange":%.2f}' "$currentPrice" "$priceChange" "$percentChange")
+          
+          # Build SEC command with optional flags
+          sec_cmd=("$SEC_HELPER" "$symbol" "--compact" "--no-alert")
+          [ "$DEBUG_FLAG" -eq 1 ] && sec_cmd+=("--debug")
+          [ "$RATIONALE_FLAG" -eq 1 ] && sec_cmd+=("--price-data" "$price_json")
+          
+          # Execute: in debug mode show stderr, otherwise suppress it
+          if [ "$DEBUG_FLAG" -eq 1 ]; then
+            sec_summary=$("${sec_cmd[@]}" || echo "[SEC: Error]")
+          else
+            sec_summary=$("${sec_cmd[@]}" 2>/dev/null || echo "[SEC: Error]")
+          fi
+          
+          # In compact mode, strip the reasoning part (everything after |SEC:)
+          if [ "$COMPACT_MODE" -eq 1 ] && echo "$sec_summary" | grep -q '|SEC: '; then
+            sec_summary=$(echo "$sec_summary" | sed 's/|SEC: .*//')
+          fi
+          
+          line="$line $sec_summary"
+        fi
+
         # Write index, symbol, and formatted line to the in-memory array
         printf "%d\t%s\t%s\n" "$i" "$symbol" "$line"
       ) &
@@ -778,9 +920,20 @@ else
     ai_index=0
     unset ai_files
     unset ai_lines
+    unset sec_rationales  # Store SEC reasoning if available
     for entry in "${ORDERED_OUTPUTS[@]}"; do
       IFS=$'\t' read -r idx symbol line <<< "$entry"
       ai_lines[$ai_index]="$line"
+      
+      # Extract SEC reasoning if present (format: "...stuff [SEC: SIGNAL]|SEC: reasoning")
+      if echo "$line" | grep -q '|SEC: '; then
+        sec_rat=$(echo "$line" | sed -n 's/.*|SEC: \(.*\)/\1/p')
+        sec_rationales[$ai_index]="$sec_rat"
+        # Remove the reasoning part from the display line (keep just the signal)
+        line=$(echo "$line" | sed 's/|SEC: .*//')
+        ai_lines[$ai_index]="$line"
+      fi
+      
       out_file="$TMP_AI_DIR/out_$ai_index"
       (
         if [ "$DEBUG_FLAG" -eq 1 ]; then
@@ -850,8 +1003,20 @@ else
         esac
       fi
       line_to_print="${ai_lines[$idx]}"
-      print_with_rationale "$line_to_print" "$REC_PRINT" "$status_part" "$rationale_part"
-      if [ "$RATIONALE_FLAG" -eq 1 ]; then
+      
+      # Add SEC reasoning if available (when RATIONALE_FLAG is set)
+      combined_rationale="$rationale_part"
+      if [ "$RATIONALE_FLAG" -eq 1 ] && [ -n "${sec_rationales[$idx]}" ]; then
+        if [ -n "$combined_rationale" ]; then
+          combined_rationale="${sec_rationales[$idx]}; $combined_rationale"
+        else
+          combined_rationale="${sec_rationales[$idx]}"
+        fi
+      fi
+      
+      print_with_rationale "$line_to_print" "$REC_PRINT" "$status_part" "$combined_rationale"
+      # Add an extra blank line between symbols when rationale display is enabled (but not in compact mode)
+      if [ "$RATIONALE_FLAG" -eq 1 ] && [ "$COMPACT_MODE" -eq 0 ]; then
         printf "\n"
       fi
       sleep "$ALERT_DELAY"
@@ -859,7 +1024,27 @@ else
   else
     for entry in "${ORDERED_OUTPUTS[@]}"; do
       IFS=$'\t' read -r idx symbol line <<< "$entry"
-      printf "%s\n" "$line"
+      
+      # Extract SEC signal and reasoning if present for proper formatting
+      sec_signal=""
+      sec_reasoning=""
+      if echo "$line" | grep -q '|SEC: '; then
+        # Extract just the signal part [SEC: HOLD] and strip brackets
+        sec_signal=$(echo "$line" | sed -n 's/.*\[SEC: \([^]]*\)\].*/\1/p')
+        # Prepend "SEC: " to the signal for display
+        sec_signal="SEC: $sec_signal"
+        # Extract the reasoning after |SEC:
+        sec_reasoning=$(echo "$line" | sed -n 's/.*|SEC: \(.*\)/\1/p')
+        # Remove both the signal and reasoning from the line
+        line=$(echo "$line" | sed 's/ \[SEC: [^]]*\]|SEC: .*//')
+      fi
+      
+      # If we have SEC data, format it nicely; otherwise just print the line
+      if [ -n "$sec_signal" ]; then
+        print_with_rationale "$line" "$sec_signal" "" "$sec_reasoning"
+      else
+        printf "%s\n" "$line"
+      fi
     done
   fi
 fi

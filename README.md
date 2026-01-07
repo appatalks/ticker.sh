@@ -25,6 +25,25 @@ Ensure the following dependencies are installed:
 - [jq](https://stedolan.github.io/jq/) - for JSON parsing.
 - [bc](https://www.gnu.org/software/bc/) - for arithmetic operations.
 
+### Python Dependencies (for AI features)
+
+To use AI alerts (`-r` flag) and SEC filing analysis (`-f` flag), you'll need:
+
+- Python 3.8 or higher
+- Required packages: `openai>=1.0.0`, `python-dotenv>=1.0.0`
+
+Install Python dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Or install individually:
+
+```bash
+pip install openai python-dotenv
+```
+
 ## Installation
 
 1. Clone the repository or download the `ticker.sh` script.
@@ -33,10 +52,16 @@ Ensure the following dependencies are installed:
    ```bash
    chmod +x ticker.sh
    ```
-3. Install the required dependencies:
+3. Install the required shell dependencies:
 
    ```bash
    sudo apt-get install jq bc curl   # For Debian-based systems
+   ```
+
+4. (Optional) Install Python dependencies for AI features:
+
+   ```bash
+   pip install -r requirements.txt
    ```
 
 ## Usage
@@ -83,6 +108,7 @@ This fork adds an optional AI-powered alerting feature that analyzes recent pric
 
 - Trigger an alert for each symbol with a timeframe using `-a TIMEFRAME` or `--alert TIMEFRAME` (e.g. `1m`, `5m`, `1h`, `1d`).
 - Include `-r` or `--rationale` to print a short rationale after the recommendation.
+- Use `-c` or `--compact` to show only signals (BUY/SELL/HOLD) without detailed reasoning.
 - Use `-d` or `--debug` to print the helper payload preview and raw model response for debugging.
 
 Note: If you pass `-r`/`--rationale` without `-a`/`--alert`, the script will default to a `1d` timeframe for the AI alert.
@@ -95,13 +121,40 @@ Examples:
         # Include rationale and debug info
         ./ticker.sh -a 5m -r -d RXT
 
+        # Show signals only without detailed reasoning
+        ./ticker.sh -r -c AAPL MSFT
+
+### SEC Filing Review (Optional - with sec_review.py)
+
+The `-f` or `--filings` flag enables AI-powered analysis of recent SEC filings (8-K, 10-Q, 10-K) to detect material events and provide buy/sell/hold recommendations.
+
+- Use `-f` to show SEC filing analysis inline with stock prices.
+- Combine `-f` and `-r` to display both SEC reasoning and price-based AI rationale.
+
+Examples:
+
+        # Show SEC filing analysis
+        ./ticker.sh -f MSFT
+
+        # Show both SEC and price rationale
+        ./ticker.sh -f -r MSFT
+
+        # Show signals only without detailed reasoning
+        ./ticker.sh -f -c MSFT
+
+ ![ticker-ai](https://raw.githubusercontent.com/appatalks/ticker.sh/main/ticker-ai.png)       
+
 Environment and configuration
 
 - Place your OpenAI API key in a `.env` file or export `OPENAI_API_KEY`.
 - Optional environment variables:
-    - `OPENAI_MODEL` (default: `gpt-5-nano`)
+    - `OPENAI_MODEL` (model for price-based AI alerts, default: `gpt-5-nano` - recommended for lowest API costs)
+    - `SEC_OPENAI_MODEL` (model for SEC filing analysis, default: `gpt-4.1`) - consider `gpt-5-nano` for lowest costs here too.
+    - `COMPACT_MODE` (set to `1` to show signals only without detailed reasoning, default: `0`)
     - `OPENAI_MAX_COMPLETION_TOKENS` (default: `650`)
     - `OPENAI_USE_RESPONSES` (set to `1` to use the Responses API - recommended; default `0`)
+    - `SEC_ONLY_FORMS` (comma-separated list of filing types to monitor, default: `8-K,10-Q,10-K`)
+    - `SEC_MAX_FILINGS` (maximum number of recent filings to review, default: `3`)
 
 Notes
 
@@ -124,10 +177,10 @@ Confidence score:
 ### PRO TIP
 
 > [!NOTE]
-> Use a foreloop for continious ```5 minute``` monitoring and AI rationale:
+> Use a foreloop for continuous ```5 minute``` monitoring with AI rationale and SEC filings:
 >
 > ```bash
-> while true; do ./ticker.sh -gs -r 5m SPY B HNST MSFT PFE PLG PYPL RXT WEAT; sleep 300; clear; done
+> while true; do ./ticker.sh -gs -r 5m -f SPY B HNST MSFT PFE PLG PYPL RXT WEAT; sleep 300; clear; done
 > ``` 
 
 ## License
