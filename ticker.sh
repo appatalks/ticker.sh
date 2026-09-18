@@ -470,9 +470,13 @@ MSG
     RATIONALE_FLAG=0
   fi
 fi
-# Load environment overrides from a .env file located next to the script, if present.
+# Load environment overrides from a .env file located next to the script, or
+# fall back to ~/.env to match the SEC helper's configuration behavior.
 # Use allexport so variables defined in .env become exported into the script's environment.
 ENV_FILE="$(dirname "$0")/.env"
+if [ ! -f "$ENV_FILE" ] && [ -f "$HOME/.env" ]; then
+  ENV_FILE="$HOME/.env"
+fi
 if [ -f "$ENV_FILE" ]; then
   # shellcheck disable=SC1090
   set -o allexport
