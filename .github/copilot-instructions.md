@@ -15,7 +15,7 @@ Environment & .env handling (important)
 
 Design constraints
 - Avoid shipping secrets. The repo should include `.env.example` and a `.gitignore` entry for `.env`.
-- The default AI model will be `gpt-5-mini` (or a compatible model name); code should allow switching models via environment variables.
+- The default AI model will be `gpt-5.6-luna` (or a compatible model name); code should allow switching models via environment variables.
 - Keep runtime dependencies minimal. Use Python 3.8+ for the helper script and the official OpenAI Python SDK (or a simple HTTP client if SDK not available).
 - The helper script should accept CLI arguments: symbol, timeframe (e.g., 1m,5m,20m,1h,1d), and optionally model and API key via env.
 

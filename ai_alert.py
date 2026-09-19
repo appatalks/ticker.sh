@@ -115,13 +115,15 @@ def call_openai(prompt: str, model: str, api_key: str, api_base: str = 'https://
         if isinstance(text_cfg, dict):
             payload['text'] = text_cfg
     else:
-        # Legacy chat completions endpoint: do not send reasoning/text as they may be rejected
+        # Chat Completions uses reasoning_effort instead of the Responses API object.
         url = f"{api_base.rstrip('/')}/chat/completions"
         payload = {
             'model': model,
             'messages': [{'role': 'user', 'content': prompt}],
             'max_completion_tokens': int(max_completion_tokens),
         }
+        if isinstance(reasoning, dict) and reasoning.get('effort'):
+            payload['reasoning_effort'] = reasoning['effort']
     try:
         resp = requests.post(url, headers=headers, json=payload, timeout=20)
         resp.raise_for_status()
@@ -151,7 +153,7 @@ def call_openai(prompt: str, model: str, api_key: str, api_base: str = 'https://
     # Prefer to extract assistant message text from parsed response
     assistant_text = extract_assistant_text_from_parsed(data)
 
-    # get finish_reason and completion_tokens when available for truncation detection
+    # Normalize completion metadata from both Chat Completions and Responses.
     finish_reason = None
     completion_tokens = None
     try:
@@ -161,6 +163,13 @@ def call_openai(prompt: str, model: str, api_key: str, api_base: str = 'https://
             finish_reason = first.get('finish_reason')
             usage = data.get('usage') or first.get('usage') or {}
             completion_tokens = usage.get('completion_tokens') if isinstance(usage, dict) else None
+        elif isinstance(data.get('output'), list):
+            usage = data.get('usage') or {}
+            completion_tokens = usage.get('output_tokens') if isinstance(usage, dict) else None
+            if data.get('status') == 'incomplete':
+                incomplete = data.get('incomplete_details') or {}
+                if incomplete.get('reason') == 'max_output_tokens':
+                    finish_reason = 'length'
     except Exception:
         finish_reason = None
         completion_tokens = None
@@ -179,64 +188,50 @@ def call_openai(prompt: str, model: str, api_key: str, api_base: str = 'https://
 
 
 def extract_assistant_text_from_parsed(parsed):
-    """Try common response shapes and return assistant text if found, else None."""
-    # If it's already a string
+    """Extract assistant text without combining metadata or reasoning items."""
     if isinstance(parsed, str):
         return parsed
     if not isinstance(parsed, dict):
         return None
 
-    def extract_text_recursive(obj):
-        """Recursively collect text from nested structures."""
-        if obj is None:
-            return ''
-        if isinstance(obj, str):
-            return obj
-        texts = []
-        if isinstance(obj, dict):
-            # check common keys
-            # Prefer explicit content keys first
-            for key in ('content', 'text', 'parts', 'message'):
-                if key in obj:
-                    t = extract_text_recursive(obj[key])
-                    if t:
-                        texts.append(t)
-            # also inspect all values but filter out short/role tokens like 'assistant'
-            for k, v in obj.items():
-                if k in ('role', 'type', 'id', 'object', 'model', 'created', 'index'):
-                    continue
-                t = extract_text_recursive(v)
-                # consider text useful if it's longer than 10 chars or contains whitespace/punctuation
-                if t and (len(t) > 10 or any(ch.isspace() for ch in t) or any(p in t for p in '.:,?"\'()[]{}')):
-                    texts.append(t)
-        elif isinstance(obj, list):
-            for item in obj:
-                t = extract_text_recursive(item)
-                if t:
-                    texts.append(t)
-        return ' '.join([s for s in texts if s])
+    def text_from_content(content):
+        if isinstance(content, str):
+            return content
+        if isinstance(content, dict):
+            text = content.get('text') or content.get('content')
+            return text if isinstance(text, str) else None
+        if isinstance(content, list):
+            texts = [text_from_content(item) for item in content]
+            return ''.join(text for text in texts if text)
+        return None
 
-    # Common: choices -> message -> content
-    choices = parsed.get('choices') or parsed.get('outputs') or parsed.get('output')
-    if isinstance(choices, list) and len(choices) > 0:
-        first = choices[0]
-        if isinstance(first, dict):
-            # Try extracting recursively from common locations
-            msg = first.get('message') or first.get('delta') or first
-            text = extract_text_recursive(msg)
+    # Responses API: ignore reasoning items and extract output_text from message items.
+    output = parsed.get('output')
+    if isinstance(output, list):
+        for item in output:
+            if isinstance(item, dict) and item.get('type') == 'message':
+                text = text_from_content(item.get('content'))
+                if text:
+                    return text
+
+    # Chat Completions API.
+    choices = parsed.get('choices')
+    if isinstance(choices, list):
+        for choice in choices:
+            if isinstance(choice, dict):
+                message = choice.get('message') or choice.get('delta')
+                if isinstance(message, dict):
+                    text = text_from_content(message.get('content'))
+                    if text:
+                        return text
+
+    # Narrow compatibility fallbacks for alternate response wrappers.
+    for key in ('response', 'result', 'message'):
+        value = parsed.get(key)
+        if isinstance(value, dict):
+            text = text_from_content(value.get('content') or value.get('text'))
             if text:
                 return text
-            # fallback: try the whole first element
-            text2 = extract_text_recursive(first)
-            if text2:
-                return text2
-
-    # Other possible top-level fields
-    for key in ('output', 'response', 'result', 'message'):
-        v = parsed.get(key)
-        t = extract_text_recursive(v)
-        if t:
-            return t
 
     return None
 
@@ -334,7 +329,7 @@ def main():
 
     load_env_from_dotenv()
     api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
-    model = args.model or os.environ.get('OPENAI_MODEL', 'gpt-5-mini')
+    model = args.model or os.environ.get('OPENAI_MODEL', 'gpt-5.6-luna')
     api_base = os.environ.get('OPENAI_API_BASE', 'https://api.openai.com/v1')
 
     # For prototype: fetch recent prices from Yahoo using their chart API
@@ -499,7 +494,7 @@ def main():
 
     # Build a payload preview (without API key) for debugging/inspection
     max_tokens_env = int(os.environ.get('OPENAI_MAX_COMPLETION_TOKENS', 800))
-    reasoning_cfg = {'effort': os.environ.get('OPENAI_REASONING_EFFORT', 'minimal')}
+    reasoning_cfg = {'effort': os.environ.get('OPENAI_REASONING_EFFORT', 'high')}
     text_cfg = {'verbosity': os.environ.get('OPENAI_TEXT_VERBOSITY', 'low')}
     use_responses_api = os.environ.get('OPENAI_USE_RESPONSES', '0') not in ('0', 'false', 'False', '')
     payload_preview = {
@@ -544,7 +539,6 @@ def main():
             print(f"{out}|{r_text}")
         else:
             print(out)
-        sys.exit(0)
         sys.exit(0)
 
     try:
@@ -682,13 +676,10 @@ def main():
 
         if isinstance(parsed_rec, dict):
             rec_s, conf_i = validate_parsed_rec(parsed_rec)
-            # Determine success (S) or failure (F) based on finish_reason and token usage
-            status = 'S'
-            if finish_reason == 'length' or (completion_tokens is not None and completion_tokens >= max_tokens_env):
-                status = 'F'
             if rec_s and conf_i is not None:
                 out_rec = rec_s
                 out_conf = conf_i
+                status = 'S' if finish_reason != 'length' else 'F'
                 # extract rationale if provided
                 rat = parsed_rec.get('rationale') or parsed_rec.get('reason') or parsed_rec.get('explanation')
                 if isinstance(rat, str):
