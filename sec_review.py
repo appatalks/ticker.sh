@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Stock Alert Monitor: AI-powered SEC filing analysis using GPT-4.1
+Stock Alert Monitor: AI-powered SEC filing analysis using gpt-5.6-luna
 
-Uses OpenAI GPT-4.1 to analyze SEC filings for any material events,
+Uses OpenAI gpt-5.6-luna to analyze SEC filings for any material events,
 market-moving developments, or significant business changes.
 
 Usage:
@@ -59,8 +59,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if (OpenAI and OPENAI_API_KEY) else None
 # AI verification is always enabled by default
 USE_AI_VERIFICATION = os.getenv("USE_AI_VERIFICATION", "true").lower() != "false"
-# Model to use for SEC filing analysis (default: gpt-4.1)
-SEC_OPENAI_MODEL = os.getenv("SEC_OPENAI_MODEL", "gpt-4.1")
+# Model and reasoning effort for SEC filing analysis.
+SEC_OPENAI_MODEL = os.getenv("SEC_OPENAI_MODEL", "gpt-5.6-luna")
+SEC_OPENAI_REASONING_EFFORT = os.getenv("SEC_OPENAI_REASONING_EFFORT", "high")
 
 # Quiet mode for compact display (set at runtime)
 QUIET_MODE = False
@@ -332,6 +333,7 @@ Respond ONLY with valid JSON:
             model=SEC_OPENAI_MODEL,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
+            reasoning_effort=SEC_OPENAI_REASONING_EFFORT,
             # temperature=0.3,
             # max_tokens=500
         )
@@ -448,10 +450,10 @@ def calculate_buy_signal(report: Report) -> None:
     # Collect all trigger types
     trigger_types = [a.trigger_type for a in report.alerts]
     
-    # Categorize triggers
-    positive_triggers = [t for t in trigger_types if t in ("A", "B", "C+", "D+", "E+", "F+", "G+", "I+", "K+")]
-    negative_triggers = [t for t in trigger_types if t in ("C-", "D-", "E-", "F-", "K-")]
-    neutral_triggers = [t for t in trigger_types if t in ("H", "J")]  # M&A and management changes can go either way
+    # Support current AI signals as well as legacy trigger codes.
+    positive_triggers = [t for t in trigger_types if t in ("BUY", "A", "B", "C+", "D+", "E+", "F+", "G+", "I+", "K+")]
+    negative_triggers = [t for t in trigger_types if t in ("SELL", "C-", "D-", "E-", "F-", "K-")]
+    neutral_triggers = [t for t in trigger_types if t in ("HOLD", "H", "J")]
     
     # Default to neutral
     report.buy_signal = "NEUTRAL"
@@ -462,6 +464,8 @@ def calculate_buy_signal(report: Report) -> None:
         report.buy_signal = "NEGATIVE"
         
         # Add reasons for negative signals
+        if "SELL" in negative_triggers:
+            report.buy_signal_reasons.append("AI filing analysis returned a SELL signal")
         if "C-" in negative_triggers:
             report.buy_signal_reasons.append("Distress markers detected (Trigger C-)")
         if "D-" in negative_triggers:
@@ -478,6 +482,8 @@ def calculate_buy_signal(report: Report) -> None:
         report.buy_signal = "POSITIVE"
         
         # Add reasons for positive signals
+        if "BUY" in positive_triggers:
+            report.buy_signal_reasons.append("AI filing analysis returned a BUY signal")
         if "A" in positive_triggers:
             report.buy_signal_reasons.append("EBITDA guidance reaffirmed/raised (Trigger A)")
         if "B" in positive_triggers:
@@ -499,6 +505,8 @@ def calculate_buy_signal(report: Report) -> None:
     
     # Neutral triggers (when only neutral triggers present)
     elif neutral_triggers:
+        if "HOLD" in neutral_triggers:
+            report.buy_signal_reasons.append("AI filing analysis returned a HOLD signal")
         if "H" in neutral_triggers:
             report.buy_signal_reasons.append("M&A activity detected - requires deeper analysis (Trigger H)")
         if "J" in neutral_triggers:
@@ -584,7 +592,7 @@ def print_report_summary(report: Report, compact: bool = False) -> str:
         print(f"Stock Alert Report: {report.ticker}")
         print(f"Timestamp: {report.timestamp}")
         if USE_AI_VERIFICATION and openai_client:
-            print(f"🤖 AI Verification: ENABLED (GPT-4.1)")
+            print(f"AI Verification: ENABLED ({SEC_OPENAI_MODEL}, reasoning={SEC_OPENAI_REASONING_EFFORT})")
         else:
             print(f"AI Verification: Disabled")
         print("="*70)

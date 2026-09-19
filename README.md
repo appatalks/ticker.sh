@@ -148,8 +148,10 @@ Environment and configuration
 
 - Place your OpenAI API key in a `.env` file or export `OPENAI_API_KEY`.
 - Optional environment variables:
-    - `OPENAI_MODEL` (model for price-based AI alerts, default: `gpt-5-nano` - recommended for lowest API costs)
-    - `SEC_OPENAI_MODEL` (model for SEC filing analysis, default: `gpt-4.1`) - consider `gpt-5-nano` for lowest costs here too.
+    - `OPENAI_MODEL` (price-alert model, default: `gpt-5.6-luna`)
+    - `SEC_OPENAI_MODEL` (SEC filing model, default: `gpt-5.6-luna`)
+    - `OPENAI_REASONING_EFFORT` (price-alert reasoning effort, default: `high`)
+    - `SEC_OPENAI_REASONING_EFFORT` (SEC analysis reasoning effort, default: `high`)
     - `COMPACT_MODE` (set to `1` to show signals only without detailed reasoning, default: `0`)
     - `OPENAI_MAX_COMPLETION_TOKENS` (default: `650`)
     - `OPENAI_USE_RESPONSES` (set to `1` to use the Responses API - recommended; default `0`)
