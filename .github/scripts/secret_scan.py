@@ -77,8 +77,7 @@ def main() -> int:
         print("secret scan passed: no likely credentials found in added lines")
         return 0
 
-    for path, line_number, rule in findings:
-        print(f"secret scan failed: {path}:{line_number}: {rule}", file=sys.stderr)
+    print("secret scan failed: likely credential detected in pull request diff", file=sys.stderr)
     return 1
 
 
